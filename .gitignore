@@ -26,12 +26,6 @@ Thumbs.db
 # Large local assets
 datasets/
 datasets/affectnet/
-models/*.keras
-models/*.h5
-models/*.tflite
-models/**/*.keras
-models/**/*.h5
-models/**/*.tflite
 
 # Credentials
 .env
