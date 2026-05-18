@@ -21,7 +21,6 @@ from src.predict_age_gender import load_age_gender_models, predict_age_gender
 from src.predict_emotion import load_emotion_model, predict_emotion
 from src.realtime import AsyncRealtimeFaceProcessor
 
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -215,6 +214,7 @@ class FaceDetectorGui:
             highlightthickness=1,
         )
         preview_frame.pack(fill=tk.BOTH, expand=True)
+        preview_frame.pack_propagate(False)
         self.preview_frame = preview_frame
 
         self.preview_label = tk.Label(
@@ -233,7 +233,7 @@ class FaceDetectorGui:
         self.root.bind("<space>", self._stop_from_key)
 
         self.controls = ttk.Frame(self.shell, style="App.TFrame")
-        self.controls.pack(fill=tk.X, pady=(12, 0))
+        self.controls.pack(side=tk.BOTTOM, fill=tk.X, pady=(12, 0), before=preview_frame)
 
         ttk.Label(self.controls, text="Camera Index", style="Body.TLabel").pack(side=tk.LEFT)
         self.camera_entry = ttk.Entry(
@@ -602,10 +602,6 @@ class FaceDetectorGui:
 
     def _enter_camera_view(self) -> None:
         self.camera_view_active = True
-        self.header.pack_forget()
-        self.shell.configure(padding=(0, 0, 0, 10))
-        self.preview_frame.configure(highlightthickness=0)
-        self.root.attributes("-fullscreen", True)
         try:
             self.root.state("zoomed")
         except tk.TclError:
@@ -616,9 +612,6 @@ class FaceDetectorGui:
             return
         self.camera_view_active = False
         self.root.attributes("-fullscreen", False)
-        self.shell.configure(padding=(14, 12, 14, 14))
-        self.preview_frame.configure(highlightthickness=1)
-        self.header.pack(fill=tk.X, pady=(0, 10), before=self.preview_frame)
 
     def _stop_from_key(self, _event=None) -> None:
         if self.camera_view_active:
