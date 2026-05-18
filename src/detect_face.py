@@ -113,6 +113,83 @@ def crop_face_bgr(
     return face
 
 
+def _measure_label_lines(
+    lines: list[str],
+    font: int,
+    font_scale: float,
+    thickness: int,
+    line_gap: int,
+) -> tuple[list[tuple[int, int, int]], int, int]:
+    """Measure text metrics for a multi-line label."""
+    metrics: list[tuple[int, int, int]] = []
+    max_width = 0
+    total_height = 0
+
+    for index, line in enumerate(lines):
+        (text_w, text_h), baseline = cv2.getTextSize(line, font, font_scale, thickness)
+        metrics.append((text_w, text_h, baseline))
+        max_width = max(max_width, text_w)
+        total_height += text_h + baseline
+        if index < len(lines) - 1:
+            total_height += line_gap
+
+    return metrics, max_width, total_height
+
+
+def _choose_label_layout(
+    frame_shape: tuple[int, ...],
+    gender_label: str,
+    age_label: str,
+    emotion_label: str,
+    score: float | None,
+) -> tuple[list[str], float, list[tuple[int, int, int]], int, int, int]:
+    """Pick the most readable label layout that fits inside the image."""
+    frame_h, frame_w = frame_shape[:2]
+    max_width = max(1, frame_w - 12)
+    max_height = max(1, frame_h - 12)
+    score_text = f" | {score:.2f}" if score is not None else ""
+
+    # Prefer a single line when it fits, but fall back to shorter multi-line
+    # layouts for small images so the annotation is not clipped.
+    label_variants: list[list[str]] = [
+        [f"{gender_label} | {age_label} | {emotion_label}{score_text}"],
+        [f"{gender_label} | {age_label}", f"{emotion_label}{score_text}"],
+        [gender_label, age_label, f"{emotion_label}{score_text}"],
+    ]
+
+    preferred_scale = 0.55
+    min_scale = 0.30
+    best_choice: tuple[float, int, list[str], list[tuple[int, int, int]], int, int, int] | None = None
+
+    for variant_index, lines in enumerate(label_variants):
+        scale = preferred_scale
+        while scale >= min_scale:
+            line_gap = max(2, int(round(scale * 4)))
+            metrics, text_w, text_h = _measure_label_lines(lines, cv2.FONT_HERSHEY_SIMPLEX, scale, 2, line_gap)
+            if text_w <= max_width and text_h <= max_height:
+                choice = (scale, variant_index, lines, metrics, text_w, text_h, line_gap)
+                if best_choice is None:
+                    best_choice = choice
+                else:
+                    best_scale, _, best_lines, *_ = best_choice
+                    if scale > best_scale or (
+                        abs(scale - best_scale) <= 1e-6 and len(lines) < len(best_lines)
+                    ):
+                        best_choice = choice
+                break
+            scale -= 0.05
+
+    if best_choice is None:
+        lines = label_variants[-1]
+        scale = min_scale
+        line_gap = max(2, int(round(scale * 4)))
+        metrics, text_w, text_h = _measure_label_lines(lines, cv2.FONT_HERSHEY_SIMPLEX, scale, 2, line_gap)
+        return lines, scale, metrics, text_w, text_h, line_gap
+
+    _, _, lines, metrics, text_w, text_h, line_gap = best_choice
+    return lines, best_choice[0], metrics, text_w, text_h, line_gap
+
+
 def draw_prediction(
     frame_bgr: np.ndarray,
     box: Box,
@@ -123,33 +200,45 @@ def draw_prediction(
 ) -> None:
     """Draw a bounding box and prediction label on *frame_bgr* in-place."""
     x, y, w, h = box
-    label = f"{gender_label} | {age_label} | {emotion_label}"
-    if score is not None:
-        label = f"{label} | {score:.2f}"
-
     cv2.rectangle(frame_bgr, (x, y), (x + w, y + h), (0, 220, 0), 2)
 
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.55
     thickness = 2
-    text_size, baseline = cv2.getTextSize(label, font, font_scale, thickness)
-    text_w, text_h = text_size
-    label_y = max(0, y - text_h - baseline - 8)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    lines, font_scale, metrics, text_w, text_h, line_gap = _choose_label_layout(
+        frame_bgr.shape,
+        gender_label,
+        age_label,
+        emotion_label,
+        score,
+    )
+
+    padding_x = 6
+    padding_y = 5
+    panel_w = text_w + padding_x * 2
+    panel_h = text_h + padding_y * 2
+    frame_h, frame_w = frame_bgr.shape[:2]
+    label_x = max(0, min(x, frame_w - panel_w))
+    label_y = max(0, min(y - panel_h - 8, frame_h - panel_h))
 
     cv2.rectangle(
         frame_bgr,
-        (x, label_y),
-        (min(frame_bgr.shape[1] - 1, x + text_w + 10), label_y + text_h + baseline + 8),
+        (label_x, label_y),
+        (label_x + panel_w, label_y + panel_h),
         (0, 0, 0),
         -1,
     )
-    cv2.putText(
-        frame_bgr,
-        label,
-        (x + 5, label_y + text_h + 2),
-        font,
-        font_scale,
-        (255, 255, 255),
-        thickness,
-        cv2.LINE_AA,
-    )
+
+    cursor_y = label_y + padding_y
+    for line, (_, line_h, baseline) in zip(lines, metrics):
+        cursor_y += line_h
+        cv2.putText(
+            frame_bgr,
+            line,
+            (label_x + padding_x, cursor_y),
+            font,
+            font_scale,
+            (255, 255, 255),
+            thickness,
+            cv2.LINE_AA,
+        )
+        cursor_y += baseline + line_gap
