@@ -284,7 +284,7 @@ def _choose_label_layout(
     frame_h, frame_w = frame_shape[:2]
     max_width = max(1, frame_w - 12)
     max_height = max(1, frame_h - 12)
-    # Confidence values are shown in the web result cards. Keep the image
+    # Confidence values are shown in the desktop result cards. Keep the image
     # annotation focused on the final labels only.
     _ = score
 

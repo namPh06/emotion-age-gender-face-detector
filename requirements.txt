@@ -1,7 +1,6 @@
 tensorflow>=2.15
 opencv-python>=4.8
 ultralytics>=8.3
-Flask>=3.0
 numpy>=1.24
 pandas>=2.0
 Pillow>=10.0

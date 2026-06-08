@@ -6,14 +6,15 @@ Desktop app for realtime face detection with age, gender, and emotion prediction
 
 | Feature | Description |
 |---|---|
-| Web Camera | Browser webcam recognition through the Flask web app |
-| Upload Image | Run recognition on an image and show an annotated result |
+| Realtime Camera | Smooth desktop webcam recognition with async inference |
+| Open Image | Run recognition on an image and show an annotated result |
 | Detector | Choose YOLO, Auto, or Haar face detection |
-| Snapshot | Capture and save a still result from the webcam |
-| Download Result | Download the annotated image shown in the browser |
+| Snapshot | Capture a still result from the webcam |
+| Save Result | Save the annotated image shown in the app |
 | Face Cards | Show each detected face crop with confidence bars |
-| History | Review recent upload and snapshot results |
-| Desktop App | Optional Tkinter interface kept as a fallback |
+| History | Review recent image and snapshot results |
+| Fast/Quality Mode | Tune detection quality while keeping the default realtime behavior fast |
+| Realtime Interval | Adjust background inference interval for the desktop camera |
 | Stop Camera | Stop the active webcam session |
 | Exit | Close the app |
 
@@ -21,13 +22,8 @@ Desktop app for realtime face detection with age, gender, and emotion prediction
 
 ```text
 face_age_gender_emotion/
-  web_app.py              # Flask web entry point
-  app.py                  # Optional Tkinter desktop entry point
+  app.py                  # Tkinter desktop entry point
   requirements.txt
-  templates/
-    index.html
-  static/
-    web/
   src/
     detect_face.py        # YOLO/Haar face detection, cropping, drawing
     predict_age_gender.py # Age and gender model loading/prediction
@@ -54,13 +50,7 @@ face_age_gender_emotion/
 cd face_age_gender_emotion
 pip install -r requirements.txt
 python scripts/download_yolo_face.py
-python web_app.py
-```
-
-Then open:
-
-```text
-http://127.0.0.1:8000
+python app.py
 ```
 
 The app loads model files from `models/age_gender/` and `models/emotion/`.
@@ -70,12 +60,6 @@ YOLO-face is the default detector. The download script stores the Hugging Face
 model `AdamCodd/YOLOv11n-face-detection` as
 `models/face_detection/yolo_face.pt`. If the YOLO package or model file is
 missing, the app falls back to OpenCV Haar Cascade so it can still open.
-
-The desktop UI is still available:
-
-```bash
-python app.py
-```
 
 ## Notes
 
