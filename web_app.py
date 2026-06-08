@@ -124,21 +124,29 @@ def _make_config() -> FaceDetectionConfig:
     )
 
 
+def _should_return_image() -> bool:
+    value = _request_value("return_image", "true").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def _prediction_payload(
     predictions,
     original_frame_bgr: np.ndarray,
     config: FaceDetectionConfig,
+    *,
+    include_crops: bool = True,
 ) -> list[dict[str, Any]]:
     payload = []
     for prediction in predictions:
         x, y, w, h = prediction.box
         result = prediction.result
         crop_image = None
-        try:
-            crop = crop_face_bgr(original_frame_bgr, prediction.box, margin=config.margin)
-            crop_image = _encode_jpeg_data_url(crop, quality=84)
-        except Exception as exc:
-            logger.warning("Could not encode face crop: %s", exc)
+        if include_crops:
+            try:
+                crop = crop_face_bgr(original_frame_bgr, prediction.box, margin=config.margin)
+                crop_image = _encode_jpeg_data_url(crop, quality=84)
+            except Exception as exc:
+                logger.warning("Could not encode face crop: %s", exc)
 
         payload.append(
             {
@@ -194,19 +202,33 @@ def analyze():
     try:
         frame = _decode_image_from_request()
         original_frame = frame.copy()
+        frame_h, frame_w = frame.shape[:2]
         config = _make_config()
+        return_image = _should_return_image()
         max_faces = config.yolo_max_det
         with _inference_lock:
-            predictions = analyze_frame_bgr(frame, _models, config, max_faces=max_faces)
+            predictions = analyze_frame_bgr(
+                frame,
+                _models,
+                config,
+                max_faces=max_faces,
+                annotate=return_image,
+            )
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        return jsonify(
-            {
-                "image": _encode_jpeg_data_url(frame),
-                "face_count": len(predictions),
-                "elapsed_ms": elapsed_ms,
-                "predictions": _prediction_payload(predictions, original_frame, config),
-            }
-        )
+        payload = {
+            "image": _encode_jpeg_data_url(frame) if return_image else None,
+            "frame_width": frame_w,
+            "frame_height": frame_h,
+            "face_count": len(predictions),
+            "elapsed_ms": elapsed_ms,
+            "predictions": _prediction_payload(
+                predictions,
+                original_frame,
+                config,
+                include_crops=return_image,
+            ),
+        }
+        return jsonify(payload)
     except Exception as exc:
         logger.exception("Analyze request failed")
         return jsonify({"error": str(exc)}), 400

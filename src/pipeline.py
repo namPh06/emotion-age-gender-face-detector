@@ -103,6 +103,7 @@ def analyze_frame_bgr(
     config: FaceDetectionConfig,
     *,
     max_faces: int | None = None,
+    annotate: bool = True,
 ) -> List[FacePrediction]:
     """Detect faces, run predictions, and draw annotations in-place."""
     boxes = detect_faces_bgr(frame_bgr, config)
@@ -118,13 +119,14 @@ def analyze_frame_bgr(
             logger.warning("Skipping face with prediction error: %s", exc)
             continue
 
-        draw_prediction(
-            frame_bgr,
-            box,
-            age_label=result.age,
-            gender_label=result.gender,
-            emotion_label=result.emotion,
-            score=result.emotion_confidence,
-        )
+        if annotate:
+            draw_prediction(
+                frame_bgr,
+                box,
+                age_label=result.age,
+                gender_label=result.gender,
+                emotion_label=result.emotion,
+                score=result.emotion_confidence,
+            )
         predictions.append(FacePrediction(box=box, result=result))
     return predictions

@@ -14,6 +14,7 @@ const els = {
   stage: document.getElementById("stage"),
   video: document.getElementById("cameraVideo"),
   resultImage: document.getElementById("resultImage"),
+  overlayLayer: document.getElementById("overlayLayer"),
   stageEmpty: document.getElementById("stageEmpty"),
   faceCount: document.getElementById("faceCount"),
   latency: document.getElementById("latency"),
@@ -66,6 +67,50 @@ function updateMetrics(data) {
   els.faceCount.textContent = String(data.face_count);
   els.latency.textContent = `${data.elapsed_ms} ms`;
   els.activeDetector.textContent = data.detector || els.detectorSelect.value.toUpperCase();
+}
+
+function clearOverlay() {
+  els.overlayLayer.innerHTML = "";
+}
+
+function sourceRect(frameWidth, frameHeight) {
+  const stageRect = els.stage.getBoundingClientRect();
+  const scale = Math.min(stageRect.width / frameWidth, stageRect.height / frameHeight);
+  const width = frameWidth * scale;
+  const height = frameHeight * scale;
+  return {
+    left: (stageRect.width - width) / 2,
+    top: (stageRect.height - height) / 2,
+    width,
+    height,
+    scale,
+  };
+}
+
+function renderOverlay(data) {
+  clearOverlay();
+  const frameWidth = Number(data.frame_width || els.video.videoWidth || 1);
+  const frameHeight = Number(data.frame_height || els.video.videoHeight || 1);
+  const rect = sourceRect(frameWidth, frameHeight);
+
+  for (const item of data.predictions) {
+    const box = item.box;
+    const node = document.createElement("div");
+    node.className = "overlay-box";
+    const left = rect.left + box.x * rect.scale;
+    const top = rect.top + box.y * rect.scale;
+    const width = box.width * rect.scale;
+    const height = box.height * rect.scale;
+    if (top < 32) {
+      node.classList.add("top-label");
+    }
+    node.style.left = `${left}px`;
+    node.style.top = `${top}px`;
+    node.style.width = `${width}px`;
+    node.style.height = `${height}px`;
+    node.innerHTML = `<span class="overlay-label">${item.gender} | ${item.age} | ${item.emotion}</span>`;
+    els.overlayLayer.appendChild(node);
+  }
 }
 
 function confidenceRow(label, value, text) {
@@ -123,6 +168,7 @@ function showAnnotatedImage(data, options = {}) {
     source: options.source || "Live",
   };
   state.latestResult = resultData;
+  clearOverlay();
   els.resultImage.src = data.image;
   els.stage.classList.add("has-result");
   els.downloadResult.disabled = false;
@@ -132,6 +178,21 @@ function showAnnotatedImage(data, options = {}) {
   if (options.saveHistory) {
     addHistory(resultData);
   }
+}
+
+function showLivePredictions(data) {
+  const resultData = {
+    ...data,
+    detector: els.detectorSelect.value.toUpperCase(),
+    quality: state.quality,
+    source: "Live",
+  };
+  state.latestResult = null;
+  els.downloadResult.disabled = true;
+  els.stage.classList.remove("has-result");
+  renderOverlay(resultData);
+  updateMetrics(resultData);
+  renderPredictions(resultData.predictions);
 }
 
 function scheduleNextFrame() {
@@ -158,12 +219,13 @@ function captureVideoBlob() {
   });
 }
 
-async function sendImage(blob, source) {
+async function sendImage(blob, source, options = {}) {
   const form = new FormData();
   form.append("image", blob, "frame.jpg");
   form.append("source", source);
   form.append("detector", els.detectorSelect.value);
   form.append("quality", state.quality);
+  form.append("return_image", options.returnImage === false ? "false" : "true");
 
   const response = await fetch("/api/analyze", {
     method: "POST",
@@ -192,8 +254,8 @@ async function analyzeCameraFrame() {
   try {
     const blob = await captureVideoBlob();
     if (blob) {
-      const data = await sendImage(blob, "webcam");
-      showAnnotatedImage(data, { saveHistory: false, source: "Live" });
+      const data = await sendImage(blob, "webcam", { returnImage: false });
+      showLivePredictions(data);
     }
   } catch (error) {
     setResultState(error.message);
@@ -222,6 +284,8 @@ async function startCamera() {
     state.running = true;
     els.stage.classList.add("camera-on");
     els.stage.classList.remove("has-result");
+    clearOverlay();
+    els.downloadResult.disabled = true;
     els.startCamera.disabled = true;
     els.snapshotCamera.disabled = false;
     els.stopCamera.disabled = false;
@@ -246,6 +310,7 @@ function stopCamera() {
   state.stream = null;
   els.video.srcObject = null;
   els.stage.classList.remove("camera-on");
+  clearOverlay();
   els.startCamera.disabled = false;
   els.snapshotCamera.disabled = true;
   els.stopCamera.disabled = true;
