@@ -270,9 +270,9 @@ class FaceDetectorGui:
         self.status_var = tk.StringVar(value="Loading models...")
         self.camera_index_var = tk.StringVar(value="0")
         self.detector_backend_var = tk.StringVar(value="YOLO")
-        self.quality_var = tk.StringVar(value="Fast")
-        self.interval_ms_var = tk.DoubleVar(value=180)
-        self.interval_label_var = tk.StringVar(value="180 ms")
+        self.quality_var = tk.StringVar(value="Quality")
+        self.interval_ms_var = tk.DoubleVar(value=80)
+        self.interval_label_var = tk.StringVar(value="80 ms")
         self.face_count_var = tk.StringVar(value="0")
         self.fps_var = tk.StringVar(value="--")
         self.latency_var = tk.StringVar(value="-- ms")
@@ -377,29 +377,7 @@ class FaceDetectorGui:
             self.detector_backend_var,
             ("YOLO", "Auto", "Haar"),
         )
-        self.quality_combo = self._control_combo(
-            parent,
-            "Mode",
-            self.quality_var,
-            ("Fast", "Quality"),
-        )
 
-        interval_frame = ttk.Frame(parent, style="Panel.TFrame")
-        interval_frame.pack(fill=tk.X, pady=(8, 12))
-        header = ttk.Frame(interval_frame, style="Panel.TFrame")
-        header.pack(fill=tk.X)
-        ttk.Label(header, text="Realtime interval", style="Body.TLabel").pack(side=tk.LEFT)
-        ttk.Label(header, textvariable=self.interval_label_var, style="Muted.TLabel").pack(
-            side=tk.RIGHT
-        )
-        self.interval_scale = ttk.Scale(
-            interval_frame,
-            from_=80,
-            to=800,
-            variable=self.interval_ms_var,
-            command=self._on_interval_change,
-        )
-        self.interval_scale.pack(fill=tk.X, pady=(6, 0))
 
         self.webcam_button = ttk.Button(
             parent,
@@ -673,8 +651,6 @@ class FaceDetectorGui:
         ):
             widget.configure(state=state)
         self.detector_combo.configure(state="readonly" if enabled else tk.DISABLED)
-        self.quality_combo.configure(state="readonly" if enabled else tk.DISABLED)
-        self.interval_scale.configure(state=state)
         self.snapshot_button.configure(state=tk.DISABLED)
         self.stop_button.configure(state=tk.DISABLED)
         self._set_save_enabled(enabled and self.latest_result is not None)
@@ -685,8 +661,6 @@ class FaceDetectorGui:
             self.camera_entry,
             self.webcam_button,
             self.detector_combo,
-            self.quality_combo,
-            self.interval_scale,
         ):
             widget.configure(state=tk.DISABLED)
         self.image_button.configure(state=tk.NORMAL)
@@ -701,8 +675,6 @@ class FaceDetectorGui:
             self.webcam_button,
             self.image_button,
             self.detector_combo,
-            self.quality_combo,
-            self.interval_scale,
             self.snapshot_button,
         ):
             widget.configure(state=tk.DISABLED)
@@ -718,8 +690,6 @@ class FaceDetectorGui:
         self.webcam_button.configure(state=tk.NORMAL)
         self.image_button.configure(state=tk.NORMAL)
         self.detector_combo.configure(state="readonly")
-        self.quality_combo.configure(state="readonly")
-        self.interval_scale.configure(state=tk.NORMAL)
         self.snapshot_button.configure(state=tk.DISABLED)
         self.stop_button.configure(state=tk.DISABLED)
         self.stop_button.configure(text="Stop")
@@ -859,13 +829,13 @@ class FaceDetectorGui:
             predict_emotion=predict_emotion_only,
             partial_result_factory=make_partial_face_result,
             inference_interval=interval_seconds,
-            full_inference_interval=1.6,
+            full_inference_interval=0.5,
             detection_width=640,
             max_faces=3,
-            emotion_history_size=5,
-            emotion_min_confidence=0.30,
-            label_switch_margin=0.18,
-            label_switch_count=3,
+            emotion_history_size=3,
+            emotion_min_confidence=0.35,
+            label_switch_margin=0.15,
+            label_switch_count=2,
         )
         prev_time = time.time()
         last_ui_update = 0.0
@@ -887,7 +857,7 @@ class FaceDetectorGui:
                 prev_time = now
                 draw_fps(frame, fps)
 
-                if now - last_ui_update >= 0.35:
+                if now - last_ui_update >= 0.25:
                     cached = processor._get_cached_predictions()
                     predictions = [
                         FacePrediction(box=item.box, result=copy(item.result))
@@ -966,13 +936,6 @@ class FaceDetectorGui:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         saved_path = None
 
-        if original_path is not None:
-            output_path = original_path.with_name(
-                f"{original_path.stem}_result{original_path.suffix}"
-            )
-            if cv2.imwrite(str(output_path), frame):
-                saved_path = output_path
-
         height, width = frame.shape[:2]
         result = AnalysisResult(
             source=source,
@@ -1027,10 +990,10 @@ class FaceDetectorGui:
         self._show_analysis_result(result, save_history=True)
         if result.face_count == 0:
             message = "No faces detected"
-        elif result.saved_path is not None:
-            message = f"Saved image result: {result.saved_path}"
-        else:
+        elif result.source == "Snapshot":
             message = "Snapshot ready"
+        else:
+            message = "Analysis complete"
         self.status_var.set(message)
         self._set_idle_controls()
 
@@ -1318,20 +1281,18 @@ class FaceDetectorGui:
 
     def _face_detection_config(self, *, source: str) -> FaceDetectionConfig:
         backend = self.detector_backend_var.get().strip().lower() or "yolo"
-        quality = self.quality_var.get().strip().lower() or "fast"
 
         if backend not in {"yolo", "auto", "haar"}:
             backend = "yolo"
 
         if source == "image":
-            yolo_imgsz = 640 if quality == "quality" else 512
             return FaceDetectionConfig(
                 backend=backend,
                 min_neighbors=4,
                 min_size=(24, 24),
                 margin=0.35,
-                yolo_imgsz=yolo_imgsz,
-                yolo_confidence=0.28 if quality == "quality" else 0.32,
+                yolo_imgsz=640,
+                yolo_confidence=0.28,
                 yolo_iou=0.45,
                 yolo_max_det=20,
             )
@@ -1340,9 +1301,9 @@ class FaceDetectorGui:
             backend=backend,
             min_neighbors=4,
             min_size=(32, 32),
-            margin=0.30,
+            margin=0.35,
             yolo_imgsz=640,
-            yolo_confidence=0.28 if quality == "quality" else 0.35,
+            yolo_confidence=0.28,
             yolo_iou=0.45,
             yolo_max_det=20,
         )
