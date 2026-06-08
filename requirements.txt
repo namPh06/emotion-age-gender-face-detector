@@ -1,5 +1,7 @@
 tensorflow>=2.15
 opencv-python>=4.8
+ultralytics>=8.3
+Flask>=3.0
 numpy>=1.24
 pandas>=2.0
 Pillow>=10.0
@@ -7,3 +9,4 @@ matplotlib>=3.7
 seaborn>=0.13
 scikit-learn>=1.3
 kaggle>=1.6
+huggingface_hub>=0.23

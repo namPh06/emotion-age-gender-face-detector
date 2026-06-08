@@ -187,6 +187,7 @@ class FaceDetectorGui:
 
         self.status_var = tk.StringVar(value="Loading models...")
         self.camera_index_var = tk.StringVar(value="0")
+        self.detector_backend_var = tk.StringVar(value="YOLO")
 
         self._build_ui()
         self._set_controls_enabled(False)
@@ -243,6 +244,17 @@ class FaceDetectorGui:
             justify=tk.CENTER,
         )
         self.camera_entry.pack(side=tk.LEFT, padx=(8, 18), ipady=3)
+
+        ttk.Label(self.controls, text="Detector", style="Body.TLabel").pack(side=tk.LEFT)
+        self.detector_combo = ttk.Combobox(
+            self.controls,
+            width=8,
+            textvariable=self.detector_backend_var,
+            values=("YOLO", "Auto", "Haar"),
+            state="readonly",
+            justify=tk.CENTER,
+        )
+        self.detector_combo.pack(side=tk.LEFT, padx=(8, 18), ipady=3)
 
         self.webcam_button = ttk.Button(
             self.controls,
@@ -382,6 +394,7 @@ class FaceDetectorGui:
             self.image_button,
         ):
             widget.configure(state=state)
+        self.detector_combo.configure(state="readonly" if enabled else tk.DISABLED)
         self.stop_button.configure(state=tk.DISABLED)
 
     def _set_running(self, running: bool) -> None:
@@ -392,6 +405,7 @@ class FaceDetectorGui:
             self.image_button,
         ):
             widget.configure(state=main_state)
+        self.detector_combo.configure(state=tk.DISABLED if running else "readonly")
         self.stop_button.configure(state=tk.NORMAL if running else tk.DISABLED)
 
     def start_webcam(self) -> None:
@@ -415,9 +429,14 @@ class FaceDetectorGui:
             messagebox.showerror("Camera Error", f"Could not open camera index {camera_index}.")
             return
 
+        config = self._face_detection_config(
+            min_neighbors=4,
+            min_size=(32, 32),
+            margin=0.30,
+        )
         self.status_var.set("Camera running")
         self._enter_camera_view()
-        self._start_capture_worker(cap)
+        self._start_capture_worker(cap, config)
 
     def choose_image(self) -> None:
         if self.camera_view_active and self.stop_event is not None:
@@ -441,9 +460,10 @@ class FaceDetectorGui:
         self.status_var.set("Processing image")
         self._set_running(True)
         self.stop_button.configure(state=tk.DISABLED)
+        config = self._face_detection_config()
         self.worker_thread = threading.Thread(
             target=self._image_worker,
-            args=(Path(file_path),),
+            args=(Path(file_path), config),
             daemon=True,
         )
         self.worker_thread.start()
@@ -451,6 +471,7 @@ class FaceDetectorGui:
     def _start_capture_worker(
         self,
         cap: cv2.VideoCapture,
+        config: FaceDetectionConfig,
     ) -> None:
         self.stop_event = threading.Event()
         self._set_running(True)
@@ -459,7 +480,7 @@ class FaceDetectorGui:
         self.stop_button.configure(text="Stop Camera")
         self.worker_thread = threading.Thread(
             target=self._capture_worker,
-            args=(cap, self.stop_event),
+            args=(cap, self.stop_event, config),
             daemon=True,
         )
         self.worker_thread.start()
@@ -468,11 +489,12 @@ class FaceDetectorGui:
         self,
         cap: cv2.VideoCapture,
         stop_event: threading.Event,
+        config: FaceDetectionConfig,
     ) -> None:
         processor = AsyncRealtimeFaceProcessor(
             self.models,
             predict_face,
-            FaceDetectionConfig(min_neighbors=4, min_size=(32, 32), margin=0.30),
+            config,
             predict_emotion=predict_emotion_only,
             partial_result_factory=make_partial_face_result,
             inference_interval=0.18,
@@ -511,13 +533,13 @@ class FaceDetectorGui:
             message = "Camera ended"
         self._run_on_ui(self._finish_worker, message)
 
-    def _image_worker(self, path: Path) -> None:
+    def _image_worker(self, path: Path, config: FaceDetectionConfig) -> None:
         frame = cv2.imread(str(path))
         if frame is None:
             self._run_on_ui(self._finish_worker, f"Could not read image: {path}")
             return
 
-        face_count = process_image_frame(frame, self.models, FaceDetectionConfig())
+        face_count = process_image_frame(frame, self.models, config)
         output_path = path.with_name(f"{path.stem}_result{path.suffix}")
         cv2.imwrite(str(output_path), frame)
         self._queue_frame(frame)
@@ -625,6 +647,14 @@ class FaceDetectorGui:
             self.root.after(0, func, *args)
         except tk.TclError:
             pass
+
+    def _face_detection_config(self, **overrides) -> FaceDetectionConfig:
+        backend = self.detector_backend_var.get().strip().lower() or "yolo"
+        config_values = {
+            "backend": backend,
+        }
+        config_values.update(overrides)
+        return FaceDetectionConfig(**config_values)
 
 
 def main() -> None:

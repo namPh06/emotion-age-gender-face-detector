@@ -26,6 +26,7 @@ Thumbs.db
 # Large local assets
 datasets/
 datasets/affectnet/
+.ultralytics/
 
 # Credentials
 .env
