@@ -109,11 +109,24 @@ class ScrollableFrame(ttk.Frame):
         self.content.bind("<Configure>", self._update_scroll_region)
         self.canvas.bind("<Configure>", self._resize_content)
 
+        # Bind mousewheel scrolling
+        self.canvas.bind("<Enter>", self._bind_mousewheel)
+        self.canvas.bind("<Leave>", self._unbind_mousewheel)
+
     def _update_scroll_region(self, _event=None) -> None:
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def _resize_content(self, event) -> None:
         self.canvas.itemconfigure(self.window_id, width=event.width)
+
+    def _bind_mousewheel(self, _event=None) -> None:
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+
+    def _unbind_mousewheel(self, _event=None) -> None:
+        self.canvas.unbind_all("<MouseWheel>")
+
+    def _on_mousewheel(self, event) -> None:
+        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
 
 def load_models() -> Models:
@@ -341,9 +354,7 @@ class FaceDetectorGui:
         self._add_metric(self.metrics, "Latency", self.latency_var, 2)
         self._add_metric(self.metrics, "Detector", self.active_detector_var, 3)
 
-        self._build_controls(self.side_panel)
-        self._build_results(self.side_panel)
-        self._build_history(self.side_panel)
+        self._build_side_panel_content(self.side_panel)
 
         self.root.bind("<F11>", self._toggle_fullscreen)
         self.root.bind("<Escape>", self._exit_fullscreen)
@@ -356,6 +367,19 @@ class FaceDetectorGui:
         cell.grid(row=0, column=column, sticky=tk.EW, padx=(0 if column == 0 else 8, 0))
         ttk.Label(cell, text=title, style="MetricTitle.TLabel").pack(anchor=tk.W)
         ttk.Label(cell, textvariable=variable, style="MetricValue.TLabel").pack(anchor=tk.W)
+
+    def _build_side_panel_content(self, parent) -> None:
+        """Build side panel with Controls at top, History at bottom, Results in middle."""
+        # Controls at the top
+        self._build_controls(parent)
+
+        # History at the bottom — pack BEFORE results so it claims bottom space
+        self.history_container = ttk.Frame(parent, style="Panel.TFrame")
+        self.history_container.pack(side=tk.BOTTOM, fill=tk.X)
+        self._build_history(self.history_container)
+
+        # Results fills the remaining middle space
+        self._build_results(parent)
 
     def _build_controls(self, parent) -> None:
         ttk.Label(parent, text="Controls", style="Section.TLabel").pack(anchor=tk.W)
@@ -456,7 +480,7 @@ class FaceDetectorGui:
             side=tk.RIGHT
         )
 
-        self.results_scroll = ScrollableFrame(parent, height=285)
+        self.results_scroll = ScrollableFrame(parent, height=200)
         self.results_scroll.pack(fill=tk.BOTH, expand=True)
         self._render_predictions([])
 
