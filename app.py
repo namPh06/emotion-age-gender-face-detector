@@ -94,7 +94,7 @@ class ScrollableFrame(ttk.Frame):
         self.canvas = tk.Canvas(
             self,
             height=height,
-            bg="#111827",
+            bg="#161f30",
             bd=0,
             highlightthickness=0,
         )
@@ -279,18 +279,36 @@ class FaceDetectorGui:
         self.latest_result: AnalysisResult | None = None
         self.history: list[AnalysisResult] = []
         self.result_photo_refs: list[ImageTk.PhotoImage] = []
+        # Cache of live card widget-groups for in-place updates (avoids full destroy/recreate)
+        self.face_cards: list[dict] = []
 
         self.status_var = tk.StringVar(value="Loading models...")
         self.camera_index_var = tk.StringVar(value="0")
         self.detector_backend_var = tk.StringVar(value="YOLO")
         self.quality_var = tk.StringVar(value="Quality")
-        self.interval_ms_var = tk.DoubleVar(value=80)
-        self.interval_label_var = tk.StringVar(value="80 ms")
+        self.interval_ms_var = tk.DoubleVar(value=150)
+        self.interval_label_var = tk.StringVar(value="150 ms")
         self.face_count_var = tk.StringVar(value="0")
         self.fps_var = tk.StringVar(value="--")
         self.latency_var = tk.StringVar(value="-- ms")
         self.active_detector_var = tk.StringVar(value="YOLO")
         self.result_state_var = tk.StringVar(value="Idle")
+
+        # Game State variables
+        self.current_mode = "detection"
+        self.game_active = False
+        self.game_target_emotion = None
+        self.game_start_time = 0.0
+        self.game_duration = 5.0
+        self.game_max_score = 0.0
+        self.game_current_score = 0.0
+        self.game_stage = "idle"
+
+        self.game_status_var = tk.StringVar(value="Đang chờ bắt đầu...")
+        self.game_target_var = tk.StringVar(value="--")
+        self.game_score_text_var = tk.StringVar(value="0%")
+        self.game_max_score_text_var = tk.StringVar(value="Cao nhất: 0%")
+        self.game_feedback_var = tk.StringVar(value="Nhấn 'Bắt đầu chơi' để chơi.")
 
         self._build_ui()
         self._set_controls_enabled(False)
@@ -299,7 +317,7 @@ class FaceDetectorGui:
 
     def _build_ui(self) -> None:
         self._configure_styles()
-        self.root.configure(bg="#0b1120")
+        self.root.configure(bg="#0b0f19")
 
         self.shell = ttk.Frame(self.root, style="App.TFrame", padding=(14, 12, 14, 14))
         self.shell.pack(fill=tk.BOTH, expand=True)
@@ -369,17 +387,47 @@ class FaceDetectorGui:
         ttk.Label(cell, textvariable=variable, style="MetricValue.TLabel").pack(anchor=tk.W)
 
     def _build_side_panel_content(self, parent) -> None:
-        """Build side panel with Controls at top, History at bottom, Results in middle."""
-        # Controls at the top
-        self._build_controls(parent)
-
-        # History at the bottom — pack BEFORE results so it claims bottom space
-        self.history_container = ttk.Frame(parent, style="Panel.TFrame")
+        """Build side panel with Mode Switcher and container frames."""
+        # 1. Mode Switcher buttons
+        self.mode_switcher = ttk.Frame(parent, style="Panel.TFrame")
+        self.mode_switcher.pack(fill=tk.X, pady=(0, 14))
+        self.mode_switcher.columnconfigure(0, weight=1)
+        self.mode_switcher.columnconfigure(1, weight=1)
+        
+        self.mode_detection_btn = ttk.Button(
+            self.mode_switcher,
+            text="Nhận diện",
+            command=lambda: self._switch_mode("detection"),
+            style="Primary.TButton"
+        )
+        self.mode_detection_btn.grid(row=0, column=0, sticky=tk.EW, padx=(0, 4))
+        
+        self.mode_game_btn = ttk.Button(
+            self.mode_switcher,
+            text="Trò chơi",
+            command=lambda: self._switch_mode("game"),
+            style="Tool.TButton"
+        )
+        self.mode_game_btn.grid(row=0, column=1, sticky=tk.EW, padx=(4, 0))
+        
+        # 2. Side content container
+        self.side_content_frame = ttk.Frame(parent, style="Panel.TFrame")
+        self.side_content_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 3. Create Detection View Frame
+        self.detection_view_frame = ttk.Frame(self.side_content_frame, style="Panel.TFrame")
+        self._build_controls(self.detection_view_frame)
+        
+        self.history_container = ttk.Frame(self.detection_view_frame, style="Panel.TFrame")
         self.history_container.pack(side=tk.BOTTOM, fill=tk.X)
         self._build_history(self.history_container)
-
-        # Results fills the remaining middle space
-        self._build_results(parent)
+        
+        self._build_results(self.detection_view_frame)
+        self.detection_view_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 4. Create Game View Frame
+        self.game_view_frame = ttk.Frame(self.side_content_frame, style="Panel.TFrame")
+        self._build_game_ui(self.game_view_frame)
 
     def _build_controls(self, parent) -> None:
         ttk.Label(parent, text="Controls", style="Section.TLabel").pack(anchor=tk.W)
@@ -520,73 +568,74 @@ class FaceDetectorGui:
         except tk.TclError:
             pass
 
-        style.configure("App.TFrame", background="#0b1120")
-        style.configure("Panel.TFrame", background="#111827")
-        style.configure("Metric.TFrame", background="#111827")
-        style.configure("Card.TFrame", background="#172033")
+        # Sleek Modern Dark Palette
+        style.configure("App.TFrame", background="#0b0f19")
+        style.configure("Panel.TFrame", background="#161f30")
+        style.configure("Metric.TFrame", background="#161f30")
+        style.configure("Card.TFrame", background="#1e293b")
         style.configure(
             "Title.TLabel",
-            background="#0b1120",
+            background="#0b0f19",
             foreground="#f8fafc",
             font=("Segoe UI", 20, "bold"),
         )
         style.configure(
             "Status.TLabel",
-            background="#0b1120",
-            foreground="#93c5fd",
+            background="#0b0f19",
+            foreground="#60a5fa",
             font=("Segoe UI", 10),
         )
         style.configure(
             "Section.TLabel",
-            background="#111827",
+            background="#161f30",
             foreground="#f8fafc",
             font=("Segoe UI", 12, "bold"),
         )
         style.configure(
             "Body.TLabel",
-            background="#111827",
+            background="#161f30",
             foreground="#cbd5e1",
             font=("Segoe UI", 10),
         )
         style.configure(
             "Muted.TLabel",
-            background="#111827",
+            background="#161f30",
             foreground="#94a3b8",
             font=("Segoe UI", 9),
         )
         style.configure(
             "CardTitle.TLabel",
-            background="#172033",
+            background="#1e293b",
             foreground="#f8fafc",
             font=("Segoe UI", 10, "bold"),
         )
         style.configure(
             "CardBody.TLabel",
-            background="#172033",
+            background="#1e293b",
             foreground="#cbd5e1",
             font=("Segoe UI", 9),
         )
         style.configure(
             "CardMuted.TLabel",
-            background="#172033",
+            background="#1e293b",
             foreground="#94a3b8",
             font=("Segoe UI", 8),
         )
         style.configure(
             "MetricTitle.TLabel",
-            background="#111827",
+            background="#161f30",
             foreground="#94a3b8",
             font=("Segoe UI", 8, "bold"),
         )
         style.configure(
             "MetricValue.TLabel",
-            background="#111827",
+            background="#161f30",
             foreground="#f8fafc",
             font=("Segoe UI", 16, "bold"),
         )
         style.configure(
             "Primary.TButton",
-            background="#2563eb",
+            background="#3b82f6",
             foreground="#ffffff",
             borderwidth=0,
             focusthickness=0,
@@ -595,12 +644,12 @@ class FaceDetectorGui:
         )
         style.map(
             "Primary.TButton",
-            background=[("active", "#1d4ed8"), ("disabled", "#475569")],
-            foreground=[("disabled", "#cbd5e1")],
+            background=[("active", "#2563eb"), ("disabled", "#334155")],
+            foreground=[("disabled", "#94a3b8")],
         )
         style.configure(
             "Tool.TButton",
-            background="#1e293b",
+            background="#334155",
             foreground="#f8fafc",
             borderwidth=0,
             focusthickness=0,
@@ -609,12 +658,12 @@ class FaceDetectorGui:
         )
         style.map(
             "Tool.TButton",
-            background=[("active", "#334155"), ("disabled", "#334155")],
-            foreground=[("disabled", "#94a3b8")],
+            background=[("active", "#475569"), ("disabled", "#1e293b")],
+            foreground=[("disabled", "#64748b")],
         )
         style.configure(
             "Danger.TButton",
-            background="#be123c",
+            background="#ef4444",
             foreground="#ffffff",
             borderwidth=0,
             focusthickness=0,
@@ -623,19 +672,28 @@ class FaceDetectorGui:
         )
         style.map(
             "Danger.TButton",
-            background=[("active", "#9f1239"), ("disabled", "#475569")],
-            foreground=[("disabled", "#cbd5e1")],
+            background=[("active", "#dc2626"), ("disabled", "#334155")],
+            foreground=[("disabled", "#94a3b8")],
         )
         style.configure(
             "Small.TButton",
-            background="#1e293b",
+            background="#334155",
             foreground="#f8fafc",
             borderwidth=0,
             focusthickness=0,
             font=("Segoe UI", 8),
             padding=(8, 4),
         )
-        style.configure("Result.Horizontal.TProgressbar", troughcolor="#334155", background="#22c55e")
+        style.configure("Result.Horizontal.TProgressbar", troughcolor="#334155", background="#10b981")
+        style.configure(
+            "TScrollbar",
+            troughcolor="#161f30",
+            background="#334155",
+            arrowcolor="#f8fafc",
+            bordercolor="#161f30",
+            darkcolor="#161f30",
+            lightcolor="#161f30",
+        )
 
     def _start_model_loader(self) -> None:
         thread = threading.Thread(target=self._load_models_worker, daemon=True)
@@ -881,7 +939,7 @@ class FaceDetectorGui:
                 prev_time = now
                 draw_fps(frame, fps)
 
-                if now - last_ui_update >= 0.25:
+                if now - last_ui_update >= 0.35:
                     cached = processor._get_cached_predictions()
                     predictions = [
                         FacePrediction(box=item.box, result=copy(item.result))
@@ -889,6 +947,9 @@ class FaceDetectorGui:
                     ]
                     self._run_on_ui(self._update_live_results, predictions, fps, draw_ms)
                     last_ui_update = now
+
+                if self.game_active:
+                    self._draw_game_overlay(frame)
 
                 self._queue_frame(frame)
                 time.sleep(0.001)
@@ -980,6 +1041,8 @@ class FaceDetectorGui:
         self.status_var.set(message)
         self.stop_event = None
         self.worker_thread = None
+        self.face_cards.clear()          # discard stale card refs from live session
+        self.result_photo_refs.clear()
         self._exit_camera_view()
         self._set_idle_controls()
 
@@ -1055,6 +1118,36 @@ class FaceDetectorGui:
         self.active_detector_var.set(self._active_detector_label())
         self.result_state_var.set("Live")
         self._render_predictions(predictions)
+        
+        # Game Mode scoring updates
+        if self.game_active and self.game_stage == "playing":
+            if predictions and self.game_target_emotion:
+                main_face = predictions[0]
+                result = main_face.result
+                if result.emotion.lower() == self.game_target_emotion.lower():
+                    score = float(result.emotion_confidence) * 100
+                else:
+                    score = 0.0
+            else:
+                score = 0.0
+                
+            self.game_current_score = score
+            self.game_score_bar["value"] = int(score)
+            self.game_score_text_var.set(f"{int(score)}%")
+            
+            if score > self.game_max_score:
+                self.game_max_score = score
+                self.game_max_score_text_var.set(f"Cao nhất: {int(score)}%")
+                
+                # Dynamic Vietnamese feedback
+                if score >= 85:
+                    self.game_feedback_var.set("Tuyệt vời! Rất giống! 🔥")
+                elif score >= 60:
+                    self.game_feedback_var.set("Khá lắm, giữ nét mặt nhé! 👍")
+                elif score >= 35:
+                    self.game_feedback_var.set("Hơi giống rồi đó! 🙂")
+                else:
+                    self.game_feedback_var.set("Hãy biểu cảm rõ hơn chút! 💪")
 
     def stop_current(self) -> None:
         if self.stop_event is not None:
@@ -1107,24 +1200,41 @@ class FaceDetectorGui:
         self.status_var.set(f"History: {result.source}")
 
     def _render_predictions(self, predictions: list[FacePrediction]) -> None:
-        for child in self.results_scroll.content.winfo_children():
-            child.destroy()
-        self.result_photo_refs.clear()
-
-        if not predictions:
-            empty = ttk.Label(
-                self.results_scroll.content,
-                text="No face details",
-                style="Muted.TLabel",
-                padding=(12, 14),
-            )
-            empty.pack(fill=tk.X)
+        # In game mode: skip the sidebar face-card panel entirely to reduce UI thread work
+        if self.current_mode == "game":
             return
 
-        for index, prediction in enumerate(predictions, start=1):
-            self._add_prediction_card(index, prediction)
+        current_count = len(predictions)
+        cached_count = len(self.face_cards)
 
-    def _add_prediction_card(self, index: int, prediction: FacePrediction) -> None:
+        # If face count changed, do a full rebuild (rare event)
+        if current_count != cached_count:
+            for child in self.results_scroll.content.winfo_children():
+                child.destroy()
+            self.result_photo_refs.clear()
+            self.face_cards.clear()
+
+            if not predictions:
+                ttk.Label(
+                    self.results_scroll.content,
+                    text="No face details",
+                    style="Muted.TLabel",
+                    padding=(12, 14),
+                ).pack(fill=tk.X)
+                return
+
+            for index, prediction in enumerate(predictions, start=1):
+                card_refs = self._add_prediction_card(index, prediction)
+                self.face_cards.append(card_refs)
+            return
+
+        # Same face count: update widgets in-place (no destroy/recreate)
+        for card_refs, prediction in zip(self.face_cards, predictions):
+            result = prediction.result
+            self._update_prediction_card(card_refs, prediction, result)
+
+    def _add_prediction_card(self, index: int, prediction: FacePrediction) -> dict:
+        """Build card widgets and return references for in-place updates."""
         result = prediction.result
         card = ttk.Frame(self.results_scroll.content, style="Card.TFrame", padding=(10, 10, 10, 10))
         card.pack(fill=tk.X, pady=(0, 10))
@@ -1135,6 +1245,7 @@ class FaceDetectorGui:
             self.result_photo_refs.append(photo)
             crop_label = ttk.Label(card, image=photo, style="CardBody.TLabel")
         else:
+            photo = None
             crop_label = tk.Label(
                 card,
                 text=f"Face {index}",
@@ -1146,21 +1257,51 @@ class FaceDetectorGui:
             )
         crop_label.grid(row=0, column=0, rowspan=5, sticky=tk.NW, padx=(0, 10))
 
-        ttk.Label(
+        title_label = ttk.Label(
             card,
             text=f"Face {index} - {result.emotion}",
             style="CardTitle.TLabel",
-        ).grid(row=0, column=1, sticky=tk.EW)
-        self._add_confidence_row(card, 1, "Emotion", result.emotion_confidence, result.emotion)
-        self._add_confidence_row(card, 2, "Gender", result.gender_confidence, result.gender)
-        self._add_confidence_row(card, 3, "Age", result.age_confidence, result.age)
+        )
+        title_label.grid(row=0, column=1, sticky=tk.EW)
+
+        e_refs = self._add_confidence_row(card, 1, "Emotion", result.emotion_confidence, result.emotion)
+        g_refs = self._add_confidence_row(card, 2, "Gender", result.gender_confidence, result.gender)
+        a_refs = self._add_confidence_row(card, 3, "Age", result.age_confidence, result.age)
 
         x, y, w, h = prediction.box
-        ttk.Label(
+        box_label = ttk.Label(
             card,
             text=f"Box {w}x{h} at {x}, {y}",
             style="CardMuted.TLabel",
-        ).grid(row=4, column=1, sticky=tk.EW, pady=(4, 0))
+        )
+        box_label.grid(row=4, column=1, sticky=tk.EW, pady=(4, 0))
+
+        return {
+            "crop_label": crop_label,
+            "title_label": title_label,
+            "box_label": box_label,
+            "emotion": e_refs,
+            "gender": g_refs,
+            "age": a_refs,
+            "index": index,
+        }
+
+    def _update_prediction_card(self, card_refs: dict, prediction: FacePrediction, result) -> None:
+        """Update existing card widgets in-place — no widget creation overhead."""
+        index = card_refs["index"]
+        card_refs["title_label"].configure(text=f"Face {index} - {result.emotion}")
+
+        if prediction.crop_bgr is not None:
+            photo = self._make_crop_photo(prediction.crop_bgr)
+            self.result_photo_refs.append(photo)
+            card_refs["crop_label"].configure(image=photo)
+
+        x, y, w, h = prediction.box
+        card_refs["box_label"].configure(text=f"Box {w}x{h} at {x}, {y}")
+
+        self._update_confidence_row(card_refs["emotion"], result.emotion_confidence, result.emotion)
+        self._update_confidence_row(card_refs["gender"], result.gender_confidence, result.gender)
+        self._update_confidence_row(card_refs["age"], result.age_confidence, result.age)
 
     def _add_confidence_row(
         self,
@@ -1169,34 +1310,34 @@ class FaceDetectorGui:
         label: str,
         confidence: float,
         value: str,
-    ) -> None:
+    ) -> dict:
+        """Build a confidence row and return refs for in-place updates."""
         percent = max(0, min(100, int(round(float(confidence) * 100))))
         wrapper = ttk.Frame(parent, style="Card.TFrame")
         wrapper.grid(row=row, column=1, sticky=tk.EW, pady=(6, 0))
         wrapper.columnconfigure(1, weight=1)
         ttk.Label(wrapper, text=label, style="CardBody.TLabel", width=8).grid(
-            row=0,
-            column=0,
-            sticky=tk.W,
+            row=0, column=0, sticky=tk.W,
         )
-        ttk.Progressbar(
+        bar = ttk.Progressbar(
             wrapper,
             maximum=100,
             value=percent,
             style="Result.Horizontal.TProgressbar",
-        ).grid(row=0, column=1, sticky=tk.EW, padx=(8, 8))
-        ttk.Label(wrapper, text=f"{percent}%", style="CardBody.TLabel", width=5).grid(
-            row=0,
-            column=2,
-            sticky=tk.E,
         )
-        ttk.Label(wrapper, text=value, style="CardMuted.TLabel").grid(
-            row=1,
-            column=0,
-            columnspan=3,
-            sticky=tk.W,
-            pady=(2, 0),
-        )
+        bar.grid(row=0, column=1, sticky=tk.EW, padx=(8, 8))
+        pct_label = ttk.Label(wrapper, text=f"{percent}%", style="CardBody.TLabel", width=5)
+        pct_label.grid(row=0, column=2, sticky=tk.E)
+        val_label = ttk.Label(wrapper, text=value, style="CardMuted.TLabel")
+        val_label.grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=(2, 0))
+        return {"bar": bar, "pct_label": pct_label, "val_label": val_label}
+
+    def _update_confidence_row(self, refs: dict, confidence: float, value: str) -> None:
+        """Update confidence bar, percent text and value label in-place."""
+        percent = max(0, min(100, int(round(float(confidence) * 100))))
+        refs["bar"]["value"] = percent
+        refs["pct_label"].configure(text=f"{percent}%")
+        refs["val_label"].configure(text=value)
 
     def _make_crop_photo(self, crop_bgr: np.ndarray) -> ImageTk.PhotoImage:
         crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
@@ -1327,10 +1468,329 @@ class FaceDetectorGui:
             min_size=(32, 32),
             margin=0.35,
             yolo_imgsz=640,
-            yolo_confidence=0.28,
-            yolo_iou=0.45,
             yolo_max_det=20,
         )
+
+    def _build_game_ui(self, parent) -> None:
+        """Create UI elements for the Emotion Mimic Game."""
+        ttk.Label(parent, text="Trò chơi Bắt chước", style="Section.TLabel").pack(anchor=tk.W, pady=(0, 10))
+        
+        # Instructions Box
+        instr_card = ttk.Frame(parent, style="Card.TFrame", padding=(12, 10, 12, 10))
+        instr_card.pack(fill=tk.X, pady=(0, 14))
+        
+        ttk.Label(
+            instr_card,
+            text="Hệ thống sẽ đưa ra một cảm xúc ngẫu nhiên. Hãy bắt chước cảm xúc đó trước camera để đạt điểm tối đa!",
+            style="CardBody.TLabel",
+            wraplength=320,
+            justify=tk.LEFT
+        ).pack(anchor=tk.W)
+        
+        # Target Display Panel
+        target_card = ttk.Frame(parent, style="Card.TFrame", padding=(14, 14, 14, 14))
+        target_card.pack(fill=tk.X, pady=(0, 14))
+        
+        ttk.Label(target_card, text="MỤC TIÊU CẦN BIỂU CẢM:", style="CardMuted.TLabel").pack(anchor=tk.CENTER)
+        self.game_target_label = ttk.Label(
+            target_card,
+            textvariable=self.game_target_var,
+            font=("Segoe UI", 20, "bold"),
+            foreground="#f59e0b",
+            background="#1e293b"
+        )
+        self.game_target_label.pack(anchor=tk.CENTER, pady=(6, 0))
+        
+        # Current Score Progress
+        score_card = ttk.Frame(parent, style="Card.TFrame", padding=(14, 12, 14, 12))
+        score_card.pack(fill=tk.X, pady=(0, 14))
+        
+        score_row = ttk.Frame(score_card, style="Card.TFrame")
+        score_row.pack(fill=tk.X)
+        ttk.Label(score_row, text="Độ khớp nét mặt:", style="CardBody.TLabel").pack(side=tk.LEFT)
+        ttk.Label(score_row, textvariable=self.game_score_text_var, style="CardTitle.TLabel").pack(side=tk.RIGHT)
+        
+        self.game_score_bar = ttk.Progressbar(
+            score_card,
+            maximum=100,
+            value=0,
+            style="Result.Horizontal.TProgressbar"
+        )
+        self.game_score_bar.pack(fill=tk.X, pady=(6, 8))
+        
+        ttk.Label(score_card, textvariable=self.game_max_score_text_var, style="CardMuted.TLabel").pack(anchor=tk.W)
+        
+        # Status / Feedback Box
+        status_card = ttk.Frame(parent, style="Card.TFrame", padding=(12, 12, 12, 12))
+        status_card.pack(fill=tk.X, pady=(0, 18))
+        
+        ttk.Label(status_card, text="Trạng thái:", style="CardMuted.TLabel").pack(anchor=tk.W)
+        ttk.Label(
+            status_card,
+            textvariable=self.game_status_var,
+            style="CardTitle.TLabel",
+            font=("Segoe UI", 12, "bold")
+        ).pack(anchor=tk.W, pady=(4, 2))
+        
+        ttk.Label(
+            status_card,
+            textvariable=self.game_feedback_var,
+            style="CardBody.TLabel",
+            font=("Segoe UI", 9, "italic")
+        ).pack(anchor=tk.W)
+        
+        # Control Buttons
+        self.game_start_btn = ttk.Button(
+            parent,
+            text="Bắt đầu chơi 🎮",
+            command=self._start_game,
+            style="Primary.TButton"
+        )
+        self.game_start_btn.pack(fill=tk.X, pady=(0, 8))
+        
+        self.game_stop_btn = ttk.Button(
+            parent,
+            text="Dừng chơi",
+            command=self._stop_game,
+            style="Danger.TButton"
+        )
+        self.game_stop_btn.pack(fill=tk.X)
+        self.game_stop_btn.configure(state=tk.DISABLED)
+
+    def _start_game(self) -> None:
+        """Initialize the game round and start the camera if needed."""
+        if self.models is None:
+            messagebox.showerror("Lỗi", "Mô hình chưa tải xong, vui lòng đợi một chút.")
+            return
+
+        if not self.camera_view_active:
+            self.start_webcam()
+            # If camera still failed to open
+            if not self.camera_view_active:
+                messagebox.showerror("Lỗi", "Hãy kết nối và bật camera trước khi chơi!")
+                return
+        
+        import random
+        GAME_EMOTIONS = ["Happy", "Sad", "Surprise", "Anger"]
+        target = random.choice(GAME_EMOTIONS)
+        
+        EMOTION_TRANSLATE = {
+            "Happy": "Hạnh phúc 😊",
+            "Sad": "Buồn bã 😢",
+            "Surprise": "Ngạc nhiên 😲",
+            "Anger": "Tức giận 😠"
+        }
+        
+        self.game_target_emotion = target
+        self.game_target_var.set(EMOTION_TRANSLATE[target])
+        self.game_stage = "countdown"
+        self.game_start_time = time.time()
+        self.game_max_score = 0.0
+        self.game_current_score = 0.0
+        self.game_active = True
+        
+        self.game_start_btn.configure(state=tk.DISABLED)
+        self.game_stop_btn.configure(state=tk.NORMAL)
+        
+        self.game_status_var.set("Chuẩn bị...")
+        self.game_feedback_var.set("Chuẩn bị biểu diễn nét mặt!")
+        self.game_score_bar["value"] = 0
+        self.game_score_text_var.set("0%")
+        self.game_max_score_text_var.set("Cao nhất: 0%")
+        
+        self._game_tick()
+
+    def _game_tick(self) -> None:
+        """Game timer tick update loop running on the UI thread."""
+        if not self.game_active:
+            return
+            
+        now = time.time()
+        elapsed = now - self.game_start_time
+        
+        if self.game_stage == "countdown":
+            remaining = 3.0 - elapsed
+            if remaining <= 0:
+                self.game_stage = "playing"
+                self.game_start_time = time.time()
+                self.game_max_score = 0.0
+                self.game_status_var.set("BẮT CHƯỚC NGAY!")
+                self.game_feedback_var.set("Biểu cảm khuôn mặt trước camera!")
+            else:
+                self.game_status_var.set(f"Sắp bắt đầu... {int(remaining) + 1}s")
+                self.game_feedback_var.set("Hãy nhìn thẳng vào ống kính.")
+                
+        elif self.game_stage == "playing":
+            remaining = self.game_duration - elapsed
+            if remaining <= 0:
+                self.game_stage = "result"
+                self.game_active = False
+                self._finish_game_round()
+                return
+            else:
+                self.game_status_var.set(f"Thời gian còn lại: {remaining:.1f}s")
+                
+        self.root.after(50, self._game_tick)
+
+    def _finish_game_round(self) -> None:
+        """Finalize game round, display results, and reset buttons."""
+        self.game_active = False
+        self.game_start_btn.configure(state=tk.NORMAL)
+        self.game_stop_btn.configure(state=tk.DISABLED)
+        
+        score = int(self.game_max_score)
+        if score >= 80:
+            self.game_status_var.set(f"KẾT QUẢ: XUẤT SẮC! 🎉 ({score}đ)")
+            self.game_feedback_var.set("Tuyệt hảo! Bạn biểu cảm vô cùng chính xác.")
+        elif score >= 50:
+            self.game_status_var.set(f"KẾT QUẢ: TỐT! 👍 ({score}đ)")
+            self.game_feedback_var.set("Khá lắm! Cố gắng tươi/rõ hơn chút nữa nhé.")
+        else:
+            self.game_status_var.set(f"KẾT QUẢ: THỬ LẠI! 💪 ({score}đ)")
+            self.game_feedback_var.set("Hãy thể hiện rõ nét mặt và thử lại!")
+
+    def _stop_game(self) -> None:
+        """Force stop the current game session."""
+        self.game_active = False
+        self.game_stage = "idle"
+        self.game_start_btn.configure(state=tk.NORMAL)
+        self.game_stop_btn.configure(state=tk.DISABLED)
+        
+        self.game_status_var.set("Đã dừng trò chơi.")
+        self.game_feedback_var.set("Nhấn 'Bắt đầu chơi' để bắt đầu.")
+        self.game_score_bar["value"] = 0
+        self.game_score_text_var.set("0%")
+        self.game_max_score_text_var.set("Cao nhất: 0%")
+
+    def _reset_game_state_ui(self) -> None:
+        """Reset game mode labels to initial state."""
+        self.game_target_var.set("--")
+        self.game_status_var.set("Đang chờ bắt đầu...")
+        self.game_feedback_var.set("Nhấn 'Bắt đầu chơi' để bắt đầu.")
+        self.game_score_bar["value"] = 0
+        self.game_score_text_var.set("0%")
+        self.game_max_score_text_var.set("Cao nhất: 0%")
+
+    def _switch_mode(self, mode: str) -> None:
+        """Switch sidebar content between Detection mode and Game mode."""
+        if self.current_mode == mode:
+            return
+            
+        self.current_mode = mode
+        if mode == "detection":
+            self._stop_game()
+            self.mode_detection_btn.configure(style="Primary.TButton")
+            self.mode_game_btn.configure(style="Tool.TButton")
+            self.game_view_frame.pack_forget()
+            self.detection_view_frame.pack(fill=tk.BOTH, expand=True)
+            self.status_var.set("Ready")
+        else:
+            self.mode_detection_btn.configure(style="Tool.TButton")
+            self.mode_game_btn.configure(style="Primary.TButton")
+            self.detection_view_frame.pack_forget()
+            self.game_view_frame.pack(fill=tk.BOTH, expand=True)
+            self.status_var.set("Chế độ chơi game")
+            self._reset_game_state_ui()
+
+    def _draw_game_overlay(self, frame: np.ndarray) -> None:
+        """Render arcade HUD directly onto the camera BGR image."""
+        h, w = frame.shape[:2]
+        
+        # Top banner background
+        banner_h = 52
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (w, banner_h), (15, 10, 5), -1)
+        cv2.addWeighted(overlay, 0.75, frame, 0.25, 0, frame)
+        
+        # Translate to ASCII Vietnamese for cv2.putText
+        target = self.game_target_emotion
+        target_map = {
+            "Happy": "HANH PHUC",
+            "Sad": "BUON BA",
+            "Surprise": "NGAC NHIEN",
+            "Anger": "TUC GIAN"
+        }
+        target_vi = target_map.get(target, "KO XAC DINH")
+        
+        if self.game_stage == "countdown":
+            # Darkened full-screen overlay for countdown
+            overlay_full = frame.copy()
+            cv2.rectangle(overlay_full, (0, 0), (w, h), (0, 0, 0), -1)
+            cv2.addWeighted(overlay_full, 0.70, frame, 0.30, 0, frame)
+            
+            text_ready = "CHUAN BI..."
+            (tw, th), _ = cv2.getTextSize(text_ready, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)
+            cv2.putText(
+                frame, text_ready,
+                ((w - tw) // 2, h // 2 - 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 215, 255), 3, cv2.LINE_AA
+            )
+            
+            text_target = f"THACH THUC: {target_vi}"
+            (tw2, th2), _ = cv2.getTextSize(text_target, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+            cv2.putText(
+                frame, text_target,
+                ((w - tw2) // 2, h // 2 + 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA
+            )
+            
+            # Show large countdown number
+            elapsed = time.time() - self.game_start_time
+            val = max(1, int(3.0 - elapsed) + 1)
+            text_num = str(val)
+            (tw3, th3), _ = cv2.getTextSize(text_num, cv2.FONT_HERSHEY_SIMPLEX, 2.5, 5)
+            cv2.putText(
+                frame, text_num,
+                ((w - tw3) // 2, h // 2 + 100),
+                cv2.FONT_HERSHEY_SIMPLEX, 2.5, (0, 255, 0), 5, cv2.LINE_AA
+            )
+            
+        elif self.game_stage == "playing":
+            elapsed = time.time() - self.game_start_time
+            remaining = max(0.0, self.game_duration - elapsed)
+            
+            # Draw Target text on left
+            cv2.putText(
+                frame, f"MUC TIEU: {target_vi}",
+                (20, 34),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 215, 255), 2, cv2.LINE_AA
+            )
+            
+            # Draw Timer on right
+            time_text = f"CON LAI: {remaining:.1f}S"
+            (tw, th), _ = cv2.getTextSize(time_text, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)
+            timer_color = (0, 0, 255) if remaining < 2.0 else (0, 255, 0)
+            cv2.putText(
+                frame, time_text,
+                (w - tw - 20, 34),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.75, timer_color, 2, cv2.LINE_AA
+            )
+            
+            # Draw current score overlay at the bottom
+            score_text = f"DIEM: {int(self.game_current_score)}%"
+            (tw2, th2), _ = cv2.getTextSize(score_text, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+            
+            # Background panel for bottom score
+            panel_padding = 12
+            cv2.rectangle(
+                frame,
+                ((w - tw2) // 2 - panel_padding, h - 55),
+                ((w - tw2) // 2 + tw2 + panel_padding, h - 15),
+                (10, 10, 10),
+                -1
+            )
+            cv2.rectangle(
+                frame,
+                ((w - tw2) // 2 - panel_padding, h - 55),
+                ((w - tw2) // 2 + tw2 + panel_padding, h - 15),
+                (0, 215, 255),
+                1
+            )
+            cv2.putText(
+                frame, score_text,
+                ((w - tw2) // 2, h - 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0) if self.game_current_score >= 60 else (255, 255, 255), 2, cv2.LINE_AA
+            )
 
 
 def main() -> None:

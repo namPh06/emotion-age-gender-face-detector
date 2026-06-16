@@ -339,7 +339,27 @@ def draw_prediction(
 ) -> None:
     """Draw a bounding box and prediction label on *frame_bgr* in-place."""
     x, y, w, h = box
-    cv2.rectangle(frame_bgr, (x, y), (x + w, y + h), (0, 220, 0), 2)
+    
+    # Choose box color based on emotion (BGR format)
+    emotion_key = emotion_label.strip().lower()
+    if emotion_key == "happy":
+        color = (0, 215, 255)      # Yellow-Orange
+    elif emotion_key == "sad":
+        color = (235, 120, 0)      # Soft Blue
+    elif emotion_key == "anger" or emotion_key == "angry":
+        color = (50, 50, 255)      # Crimson Red
+    elif emotion_key == "surprise":
+        color = (220, 100, 220)    # Violet Purple
+    elif emotion_key == "fear":
+        color = (0, 100, 255)      # Bright Orange
+    elif emotion_key == "disgust":
+        color = (0, 128, 128)      # Olive/Dark Green
+    elif emotion_key == "neutral":
+        color = (160, 160, 160)    # Slate Gray
+    else:
+        color = (0, 220, 0)        # Fallback Green
+
+    cv2.rectangle(frame_bgr, (x, y), (x + w, y + h), color, 2)
 
     thickness = 2
     font = cv2.FONT_HERSHEY_SIMPLEX
