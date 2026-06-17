@@ -12,6 +12,7 @@ import time
 import tkinter as tk
 import traceback
 from tkinter import filedialog, messagebox, ttk
+import customtkinter as ctk
 from typing import Optional
 
 import cv2
@@ -84,49 +85,6 @@ class AnalysisResult:
     predictions: list[FacePrediction]
     saved_path: Path | None = None
     created_at: str = field(default_factory=lambda: datetime.now().strftime("%H:%M:%S"))
-
-
-class ScrollableFrame(ttk.Frame):
-    """A lightweight scrollable frame for result cards."""
-
-    def __init__(self, parent, *, height: int = 260) -> None:
-        super().__init__(parent, style="Panel.TFrame")
-        self.canvas = tk.Canvas(
-            self,
-            height=height,
-            bg="#161f30",
-            bd=0,
-            highlightthickness=0,
-        )
-        self.scrollbar = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.canvas.yview)
-        self.content = ttk.Frame(self.canvas, style="Panel.TFrame")
-        self.window_id = self.canvas.create_window((0, 0), window=self.content, anchor=tk.NW)
-
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self.content.bind("<Configure>", self._update_scroll_region)
-        self.canvas.bind("<Configure>", self._resize_content)
-
-        # Bind mousewheel scrolling
-        self.canvas.bind("<Enter>", self._bind_mousewheel)
-        self.canvas.bind("<Leave>", self._unbind_mousewheel)
-
-    def _update_scroll_region(self, _event=None) -> None:
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-
-    def _resize_content(self, event) -> None:
-        self.canvas.itemconfigure(self.window_id, width=event.width)
-
-    def _bind_mousewheel(self, _event=None) -> None:
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
-
-    def _unbind_mousewheel(self, _event=None) -> None:
-        self.canvas.unbind_all("<MouseWheel>")
-
-    def _on_mousewheel(self, event) -> None:
-        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
 
 def load_models() -> Models:
@@ -254,7 +212,7 @@ def draw_fps(frame: np.ndarray, fps: float) -> None:
 
 
 class FaceDetectorGui:
-    """Tkinter UI that keeps model inference off the main UI thread."""
+    """CustomTkinter UI that keeps model inference off the main UI thread."""
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -286,8 +244,8 @@ class FaceDetectorGui:
         self.camera_index_var = tk.StringVar(value="0")
         self.detector_backend_var = tk.StringVar(value="YOLO")
         self.quality_var = tk.StringVar(value="Quality")
-        self.interval_ms_var = tk.DoubleVar(value=150)
-        self.interval_label_var = tk.StringVar(value="150 ms")
+        self.interval_ms_var = tk.DoubleVar(value=80)
+        self.interval_label_var = tk.StringVar(value="80 ms")
         self.face_count_var = tk.StringVar(value="0")
         self.fps_var = tk.StringVar(value="--")
         self.latency_var = tk.StringVar(value="-- ms")
@@ -317,40 +275,85 @@ class FaceDetectorGui:
 
     def _build_ui(self) -> None:
         self._configure_styles()
-        self.root.configure(bg="#0b0f19")
+        self.root.configure(fg_color="#0b1120")
 
-        self.shell = ttk.Frame(self.root, style="App.TFrame", padding=(14, 12, 14, 14))
-        self.shell.pack(fill=tk.BOTH, expand=True)
+        self.shell = ctk.CTkFrame(self.root, fg_color="transparent")
+        self.shell.pack(fill=tk.BOTH, expand=True, padx=16, pady=14)
 
-        self.header = ttk.Frame(self.shell, style="App.TFrame")
-        self.header.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(self.header, text="Face Analysis", style="Title.TLabel").pack(side=tk.LEFT)
-        ttk.Label(self.header, textvariable=self.status_var, style="Status.TLabel").pack(
-            side=tk.RIGHT
+        self.header = ctk.CTkFrame(self.shell, fg_color="transparent")
+        self.header.pack(fill=tk.X, pady=(0, 12))
+        ctk.CTkLabel(
+            self.header,
+            text="Face Analysis",
+            font=ctk.CTkFont(family="Segoe UI", size=28, weight="bold"),
+            text_color="#f8fafc",
+        ).pack(side=tk.LEFT)
+        self.status_badge = ctk.CTkLabel(
+            self.header,
+            textvariable=self.status_var,
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#dbeafe",
+            fg_color="#1d4ed8",
+            corner_radius=14,
+            padx=14,
+            pady=8,
         )
+        self.status_badge.pack(side=tk.RIGHT)
 
-        self.workspace = ttk.Frame(self.shell, style="App.TFrame")
+        self.workspace = ctk.CTkFrame(self.shell, fg_color="transparent")
         self.workspace.pack(fill=tk.BOTH, expand=True)
 
-        self.main_panel = ttk.Frame(self.workspace, style="App.TFrame")
+        self.main_panel = ctk.CTkFrame(self.workspace, fg_color="transparent")
         self.main_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.side_panel = ttk.Frame(
+        self.side_panel = ctk.CTkFrame(
             self.workspace,
-            style="Panel.TFrame",
-            width=380,
-            padding=(14, 14, 14, 14),
+            width=390,
+            fg_color="#111827",
+            corner_radius=20,
+            border_width=1,
+            border_color="#243041",
         )
-        self.side_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(14, 0))
+        self.side_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(16, 0))
         self.side_panel.pack_propagate(False)
 
-        preview_frame = tk.Frame(
+        preview_shell = ctk.CTkFrame(
             self.main_panel,
+            fg_color="#111827",
+            corner_radius=22,
+            border_width=1,
+            border_color="#243041",
+        )
+        preview_shell.pack(fill=tk.BOTH, expand=True)
+        preview_shell.pack_propagate(False)
+
+        self.preview_header = ctk.CTkFrame(preview_shell, fg_color="transparent")
+        self.preview_header.pack(fill=tk.X, padx=16, pady=(14, 8))
+        ctk.CTkLabel(
+            self.preview_header,
+            text="Live Preview",
+            font=ctk.CTkFont(family="Segoe UI", size=17, weight="bold"),
+            text_color="#f8fafc",
+        ).pack(side=tk.LEFT)
+        self.preview_state_chip = ctk.CTkLabel(
+            self.preview_header,
+            textvariable=self.result_state_var,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#bfdbfe",
+            fg_color="#1e3a8a",
+            corner_radius=12,
+            padx=12,
+            pady=6,
+        )
+        self.preview_state_chip.pack(side=tk.RIGHT)
+
+        preview_frame = tk.Frame(
+            preview_shell,
             bg="#020617",
-            highlightbackground="#334155",
+            highlightbackground="#263449",
             highlightthickness=1,
         )
-        preview_frame.pack(fill=tk.BOTH, expand=True)
+        preview_frame.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
         preview_frame.pack_propagate(False)
         self.preview_frame = preview_frame
 
@@ -365,8 +368,8 @@ class FaceDetectorGui:
         self.preview_label.pack(fill=tk.BOTH, expand=True)
         self.preview_label.bind("<Configure>", self._update_preview_size)
 
-        self.metrics = ttk.Frame(self.main_panel, style="Panel.TFrame", padding=(0, 10, 0, 0))
-        self.metrics.pack(fill=tk.X)
+        self.metrics = ctk.CTkFrame(self.main_panel, fg_color="transparent")
+        self.metrics.pack(fill=tk.X, pady=(12, 0))
         self._add_metric(self.metrics, "Faces", self.face_count_var, 0)
         self._add_metric(self.metrics, "FPS", self.fps_var, 1)
         self._add_metric(self.metrics, "Latency", self.latency_var, 2)
@@ -380,124 +383,194 @@ class FaceDetectorGui:
         self.root.bind("<space>", self._stop_from_key)
 
     def _add_metric(self, parent, title: str, variable: tk.StringVar, column: int) -> None:
-        parent.columnconfigure(column, weight=1, uniform="metrics")
-        cell = ttk.Frame(parent, style="Metric.TFrame", padding=(12, 10, 12, 10))
-        cell.grid(row=0, column=column, sticky=tk.EW, padx=(0 if column == 0 else 8, 0))
-        ttk.Label(cell, text=title, style="MetricTitle.TLabel").pack(anchor=tk.W)
-        ttk.Label(cell, textvariable=variable, style="MetricValue.TLabel").pack(anchor=tk.W)
+        parent.grid_columnconfigure(column, weight=1, uniform="metrics")
+        cell = ctk.CTkFrame(
+            parent,
+            fg_color="#111827",
+            corner_radius=18,
+            border_width=1,
+            border_color="#243041",
+        )
+        cell.grid(row=0, column=column, sticky=tk.EW, padx=(0 if column == 0 else 10, 0))
+        ctk.CTkLabel(
+            cell,
+            text=title,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#94a3b8",
+        ).pack(anchor=tk.W, padx=14, pady=(12, 2))
+        ctk.CTkLabel(
+            cell,
+            textvariable=variable,
+            font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"),
+            text_color="#f8fafc",
+        ).pack(anchor=tk.W, padx=14, pady=(0, 12))
 
     def _build_side_panel_content(self, parent) -> None:
         """Build side panel with Mode Switcher and container frames."""
-        # 1. Mode Switcher buttons
-        self.mode_switcher = ttk.Frame(parent, style="Panel.TFrame")
-        self.mode_switcher.pack(fill=tk.X, pady=(0, 14))
-        self.mode_switcher.columnconfigure(0, weight=1)
-        self.mode_switcher.columnconfigure(1, weight=1)
-        
-        self.mode_detection_btn = ttk.Button(
+        self.mode_switcher = ctk.CTkFrame(parent, fg_color="transparent")
+        self.mode_switcher.pack(fill=tk.X, padx=14, pady=(14, 12))
+        self.mode_switcher.grid_columnconfigure((0, 1), weight=1)
+
+        self.mode_detection_btn = ctk.CTkButton(
             self.mode_switcher,
             text="Nhận diện",
             command=lambda: self._switch_mode("detection"),
-            style="Primary.TButton"
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
+            text_color="#ffffff",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            corner_radius=14,
+            height=42,
         )
-        self.mode_detection_btn.grid(row=0, column=0, sticky=tk.EW, padx=(0, 4))
-        
-        self.mode_game_btn = ttk.Button(
+        self.mode_detection_btn.grid(row=0, column=0, sticky=tk.EW, padx=(0, 6))
+
+        self.mode_game_btn = ctk.CTkButton(
             self.mode_switcher,
             text="Trò chơi",
             command=lambda: self._switch_mode("game"),
-            style="Tool.TButton"
+            fg_color="#334155",
+            hover_color="#475569",
+            text_color="#f8fafc",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            corner_radius=14,
+            height=42,
         )
-        self.mode_game_btn.grid(row=0, column=1, sticky=tk.EW, padx=(4, 0))
-        
-        # 2. Side content container
-        self.side_content_frame = ttk.Frame(parent, style="Panel.TFrame")
-        self.side_content_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # 3. Create Detection View Frame
-        self.detection_view_frame = ttk.Frame(self.side_content_frame, style="Panel.TFrame")
+        self.mode_game_btn.grid(row=0, column=1, sticky=tk.EW, padx=(6, 0))
+
+        self.side_content_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.side_content_frame.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
+
+        self.detection_view_frame = ctk.CTkScrollableFrame(
+            self.side_content_frame,
+            fg_color="transparent",
+            scrollbar_button_color="#334155",
+            scrollbar_button_hover_color="#475569",
+        )
         self._build_controls(self.detection_view_frame)
-        
-        self.history_container = ttk.Frame(self.detection_view_frame, style="Panel.TFrame")
-        self.history_container.pack(side=tk.BOTTOM, fill=tk.X)
-        self._build_history(self.history_container)
-        
+
         self._build_results(self.detection_view_frame)
+
+        self.history_container = ctk.CTkFrame(self.detection_view_frame, fg_color="transparent")
+        self.history_container.pack(fill=tk.X, pady=(4, 0))
+        self._build_history(self.history_container)
+
         self.detection_view_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # 4. Create Game View Frame
-        self.game_view_frame = ttk.Frame(self.side_content_frame, style="Panel.TFrame")
+
+        self.game_view_frame = ctk.CTkFrame(self.side_content_frame, fg_color="transparent")
         self._build_game_ui(self.game_view_frame)
 
     def _build_controls(self, parent) -> None:
-        ttk.Label(parent, text="Controls", style="Section.TLabel").pack(anchor=tk.W)
+        ctk.CTkLabel(
+            parent,
+            text="Controls",
+            font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"),
+            text_color="#f8fafc",
+        ).pack(anchor=tk.W, pady=(0, 8))
 
-        camera_row = ttk.Frame(parent, style="Panel.TFrame")
-        camera_row.pack(fill=tk.X, pady=(10, 8))
-        ttk.Label(camera_row, text="Camera", style="Body.TLabel").pack(side=tk.LEFT)
-        self.camera_entry = ttk.Entry(
+        controls_card = ctk.CTkFrame(
+            parent,
+            fg_color="#0f172a",
+            corner_radius=18,
+            border_width=1,
+            border_color="#243041",
+        )
+        controls_card.pack(fill=tk.X)
+
+        camera_row = ctk.CTkFrame(controls_card, fg_color="transparent")
+        camera_row.pack(fill=tk.X, padx=14, pady=(14, 10))
+        ctk.CTkLabel(
             camera_row,
-            width=7,
+            text="Camera",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#cbd5e1",
+        ).pack(side=tk.LEFT)
+        self.camera_entry = ctk.CTkEntry(
+            camera_row,
+            width=72,
             textvariable=self.camera_index_var,
             justify=tk.CENTER,
+            corner_radius=12,
         )
-        self.camera_entry.pack(side=tk.RIGHT, ipady=3)
+        self.camera_entry.pack(side=tk.RIGHT)
 
         self.detector_combo = self._control_combo(
-            parent,
+            controls_card,
             "Detector",
             self.detector_backend_var,
             ("YOLO", "Auto", "Haar"),
         )
 
-
-        self.webcam_button = ttk.Button(
-            parent,
+        self.webcam_button = ctk.CTkButton(
+            controls_card,
             text="Start Camera",
             command=self.start_webcam,
-            style="Primary.TButton",
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
+            text_color="#ffffff",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            corner_radius=14,
+            height=42,
         )
-        self.webcam_button.pack(fill=tk.X, pady=(2, 8))
+        self.webcam_button.pack(fill=tk.X, padx=14, pady=(14, 10))
 
-        action_grid = ttk.Frame(parent, style="Panel.TFrame")
-        action_grid.pack(fill=tk.X)
-        action_grid.columnconfigure(0, weight=1)
-        action_grid.columnconfigure(1, weight=1)
-        self.snapshot_button = ttk.Button(
+        action_grid = ctk.CTkFrame(controls_card, fg_color="transparent")
+        action_grid.pack(fill=tk.X, padx=14, pady=(0, 14))
+        action_grid.grid_columnconfigure((0, 1), weight=1)
+        self.snapshot_button = ctk.CTkButton(
             action_grid,
             text="Snapshot",
             command=self.snapshot_camera,
-            style="Tool.TButton",
+            fg_color="#334155",
+            hover_color="#475569",
+            text_color="#f8fafc",
+            corner_radius=12,
+            height=38,
         )
-        self.snapshot_button.grid(row=0, column=0, sticky=tk.EW, padx=(0, 5), pady=(0, 8))
-        self.stop_button = ttk.Button(
+        self.snapshot_button.grid(row=0, column=0, sticky=tk.EW, padx=(0, 6), pady=(0, 8))
+        self.stop_button = ctk.CTkButton(
             action_grid,
             text="Stop",
             command=self.stop_current,
-            style="Danger.TButton",
+            fg_color="#dc2626",
+            hover_color="#b91c1c",
+            text_color="#ffffff",
+            corner_radius=12,
+            height=38,
         )
-        self.stop_button.grid(row=0, column=1, sticky=tk.EW, padx=(5, 0), pady=(0, 8))
+        self.stop_button.grid(row=0, column=1, sticky=tk.EW, padx=(6, 0), pady=(0, 8))
 
-        self.image_button = ttk.Button(
+        self.image_button = ctk.CTkButton(
             action_grid,
             text="Open Image",
             command=self.choose_image,
-            style="Tool.TButton",
+            fg_color="#334155",
+            hover_color="#475569",
+            text_color="#f8fafc",
+            corner_radius=12,
+            height=38,
         )
-        self.image_button.grid(row=1, column=0, sticky=tk.EW, padx=(0, 5))
-        self.save_button = ttk.Button(
+        self.image_button.grid(row=1, column=0, sticky=tk.EW, padx=(0, 6))
+        self.save_button = ctk.CTkButton(
             action_grid,
             text="Save Result",
             command=self.save_current_result,
-            style="Tool.TButton",
+            fg_color="#334155",
+            hover_color="#475569",
+            text_color="#f8fafc",
+            corner_radius=12,
+            height=38,
         )
-        self.save_button.grid(row=1, column=1, sticky=tk.EW, padx=(5, 0))
+        self.save_button.grid(row=1, column=1, sticky=tk.EW, padx=(6, 0))
 
-        self.quit_button = ttk.Button(
+        self.quit_button = ctk.CTkButton(
             parent,
             text="Exit",
             command=self.close,
-            style="Tool.TButton",
+            fg_color="#1e293b",
+            hover_color="#334155",
+            text_color="#f8fafc",
+            corner_radius=14,
+            height=40,
         )
         self.quit_button.pack(fill=tk.X, pady=(12, 0))
 
@@ -507,40 +580,72 @@ class FaceDetectorGui:
         label: str,
         variable: tk.StringVar,
         values: tuple[str, ...],
-    ) -> ttk.Combobox:
-        ttk.Label(parent, text=label, style="Body.TLabel").pack(anchor=tk.W, pady=(8, 4))
-        combo = ttk.Combobox(
+    ):
+        ctk.CTkLabel(
             parent,
-            textvariable=variable,
-            values=values,
+            text=label,
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#cbd5e1",
+        ).pack(anchor=tk.W, padx=14, pady=(0, 6))
+        combo = ctk.CTkComboBox(
+            parent,
+            variable=variable,
+            values=list(values),
             state="readonly",
             justify=tk.CENTER,
+            corner_radius=12,
+            button_color="#2563eb",
+            button_hover_color="#1d4ed8",
+            border_color="#334155",
+            fg_color="#0f172a",
+            dropdown_fg_color="#0f172a",
+            dropdown_hover_color="#1e293b",
         )
-        combo.pack(fill=tk.X, ipady=3)
-        combo.bind("<<ComboboxSelected>>", lambda _event: self._sync_active_detector())
+        combo.pack(fill=tk.X, padx=14)
+        combo.configure(command=lambda _value: self._sync_active_detector())
         return combo
 
     def _build_results(self, parent) -> None:
-        header = ttk.Frame(parent, style="Panel.TFrame")
+        header = ctk.CTkFrame(parent, fg_color="transparent")
         header.pack(fill=tk.X, pady=(18, 8))
-        ttk.Label(header, text="Results", style="Section.TLabel").pack(side=tk.LEFT)
-        ttk.Label(header, textvariable=self.result_state_var, style="Muted.TLabel").pack(
-            side=tk.RIGHT
-        )
+        ctk.CTkLabel(
+            header,
+            text="Results",
+            font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"),
+            text_color="#f8fafc",
+        ).pack(side=tk.LEFT)
+        ctk.CTkLabel(
+            header,
+            textvariable=self.result_state_var,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#94a3b8",
+        ).pack(side=tk.RIGHT)
 
-        self.results_scroll = ScrollableFrame(parent, height=200)
-        self.results_scroll.pack(fill=tk.BOTH, expand=True)
+        self.results_scroll = ctk.CTkFrame(parent, fg_color="#0f172a", corner_radius=14)
+        self.results_scroll.pack(fill=tk.X)
+        self.results_scroll.content = ctk.CTkFrame(self.results_scroll, fg_color="transparent")
+        self.results_scroll.content.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         self._render_predictions([])
 
     def _build_history(self, parent) -> None:
-        header = ttk.Frame(parent, style="Panel.TFrame")
+        header = ctk.CTkFrame(parent, fg_color="transparent")
         header.pack(fill=tk.X, pady=(18, 8))
-        ttk.Label(header, text="History", style="Section.TLabel").pack(side=tk.LEFT)
-        self.clear_history_button = ttk.Button(
+        ctk.CTkLabel(
+            header,
+            text="History",
+            font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"),
+            text_color="#f8fafc",
+        ).pack(side=tk.LEFT)
+        self.clear_history_button = ctk.CTkButton(
             header,
             text="Clear",
             command=self.clear_history,
-            style="Small.TButton",
+            fg_color="#334155",
+            hover_color="#475569",
+            text_color="#f8fafc",
+            corner_radius=10,
+            height=30,
+            width=70,
         )
         self.clear_history_button.pack(side=tk.RIGHT)
 
@@ -568,131 +673,33 @@ class FaceDetectorGui:
         except tk.TclError:
             pass
 
-        # Sleek Modern Dark Palette
-        style.configure("App.TFrame", background="#0b0f19")
-        style.configure("Panel.TFrame", background="#161f30")
-        style.configure("Metric.TFrame", background="#161f30")
-        style.configure("Card.TFrame", background="#1e293b")
-        style.configure(
-            "Title.TLabel",
-            background="#0b0f19",
-            foreground="#f8fafc",
-            font=("Segoe UI", 20, "bold"),
-        )
-        style.configure(
-            "Status.TLabel",
-            background="#0b0f19",
-            foreground="#60a5fa",
-            font=("Segoe UI", 10),
-        )
-        style.configure(
-            "Section.TLabel",
-            background="#161f30",
-            foreground="#f8fafc",
-            font=("Segoe UI", 12, "bold"),
-        )
-        style.configure(
-            "Body.TLabel",
-            background="#161f30",
-            foreground="#cbd5e1",
-            font=("Segoe UI", 10),
-        )
-        style.configure(
-            "Muted.TLabel",
-            background="#161f30",
-            foreground="#94a3b8",
-            font=("Segoe UI", 9),
-        )
-        style.configure(
-            "CardTitle.TLabel",
-            background="#1e293b",
-            foreground="#f8fafc",
-            font=("Segoe UI", 10, "bold"),
-        )
-        style.configure(
-            "CardBody.TLabel",
-            background="#1e293b",
-            foreground="#cbd5e1",
-            font=("Segoe UI", 9),
-        )
-        style.configure(
-            "CardMuted.TLabel",
-            background="#1e293b",
-            foreground="#94a3b8",
-            font=("Segoe UI", 8),
-        )
-        style.configure(
-            "MetricTitle.TLabel",
-            background="#161f30",
-            foreground="#94a3b8",
-            font=("Segoe UI", 8, "bold"),
-        )
-        style.configure(
-            "MetricValue.TLabel",
-            background="#161f30",
-            foreground="#f8fafc",
-            font=("Segoe UI", 16, "bold"),
-        )
-        style.configure(
-            "Primary.TButton",
-            background="#3b82f6",
-            foreground="#ffffff",
-            borderwidth=0,
-            focusthickness=0,
-            font=("Segoe UI", 10, "bold"),
-            padding=(16, 9),
-        )
-        style.map(
-            "Primary.TButton",
-            background=[("active", "#2563eb"), ("disabled", "#334155")],
-            foreground=[("disabled", "#94a3b8")],
-        )
-        style.configure(
-            "Tool.TButton",
-            background="#334155",
-            foreground="#f8fafc",
-            borderwidth=0,
-            focusthickness=0,
-            font=("Segoe UI", 10),
-            padding=(14, 9),
-        )
-        style.map(
-            "Tool.TButton",
-            background=[("active", "#475569"), ("disabled", "#1e293b")],
-            foreground=[("disabled", "#64748b")],
-        )
-        style.configure(
-            "Danger.TButton",
-            background="#ef4444",
-            foreground="#ffffff",
-            borderwidth=0,
-            focusthickness=0,
-            font=("Segoe UI", 10, "bold"),
-            padding=(14, 9),
-        )
-        style.map(
-            "Danger.TButton",
-            background=[("active", "#dc2626"), ("disabled", "#334155")],
-            foreground=[("disabled", "#94a3b8")],
-        )
-        style.configure(
-            "Small.TButton",
-            background="#334155",
-            foreground="#f8fafc",
-            borderwidth=0,
-            focusthickness=0,
-            font=("Segoe UI", 8),
-            padding=(8, 4),
-        )
+        style.configure("App.TFrame", background="#0b1120")
+        style.configure("Panel.TFrame", background="#111827")
+        style.configure("Metric.TFrame", background="#111827")
+        style.configure("Card.TFrame", background="#172033")
+        style.configure("Title.TLabel", background="#0b1120", foreground="#f8fafc", font=("Segoe UI", 20, "bold"))
+        style.configure("Status.TLabel", background="#0b1120", foreground="#60a5fa", font=("Segoe UI", 10))
+        style.configure("Section.TLabel", background="#111827", foreground="#f8fafc", font=("Segoe UI", 12, "bold"))
+        style.configure("Body.TLabel", background="#111827", foreground="#cbd5e1", font=("Segoe UI", 10))
+        style.configure("Muted.TLabel", background="#111827", foreground="#94a3b8", font=("Segoe UI", 9))
+        style.configure("CardTitle.TLabel", background="#172033", foreground="#f8fafc", font=("Segoe UI", 10, "bold"))
+        style.configure("CardBody.TLabel", background="#172033", foreground="#cbd5e1", font=("Segoe UI", 9))
+        style.configure("CardMuted.TLabel", background="#172033", foreground="#94a3b8", font=("Segoe UI", 8))
+        style.configure("MetricTitle.TLabel", background="#111827", foreground="#94a3b8", font=("Segoe UI", 8, "bold"))
+        style.configure("MetricValue.TLabel", background="#111827", foreground="#f8fafc", font=("Segoe UI", 16, "bold"))
+        style.configure("Primary.TButton", background="#3b82f6", foreground="#ffffff")
+        style.configure("Tool.TButton", background="#334155", foreground="#f8fafc")
+        style.configure("Danger.TButton", background="#ef4444", foreground="#ffffff")
+        style.configure("Small.TButton", background="#334155", foreground="#f8fafc")
         style.configure("Result.Horizontal.TProgressbar", troughcolor="#334155", background="#10b981")
         style.configure(
             "TScrollbar",
-            troughcolor="#161f30",
+            troughcolor="#111827",
             background="#334155",
             arrowcolor="#f8fafc",
-            bordercolor="#161f30",
-            darkcolor="#161f30",
-            lightcolor="#161f30",
+            bordercolor="#111827",
+            darkcolor="#111827",
+            lightcolor="#111827",
         )
 
     def _start_model_loader(self) -> None:
@@ -731,12 +738,12 @@ class FaceDetectorGui:
             self.webcam_button,
             self.image_button,
         ):
-            widget.configure(state=state)
-        self.detector_combo.configure(state="readonly" if enabled else tk.DISABLED)
-        self.snapshot_button.configure(state=tk.DISABLED)
-        self.stop_button.configure(state=tk.DISABLED)
+            self._set_widget_state(widget, state)
+        self._set_widget_state(self.detector_combo, "readonly" if enabled else tk.DISABLED)
+        self._set_widget_state(self.snapshot_button, tk.DISABLED)
+        self._set_widget_state(self.stop_button, tk.DISABLED)
         self._set_save_enabled(enabled and self.latest_result is not None)
-        self.quit_button.configure(state=tk.NORMAL)
+        self._set_widget_state(self.quit_button, tk.NORMAL)
 
     def _set_camera_running(self) -> None:
         for widget in (
@@ -745,11 +752,11 @@ class FaceDetectorGui:
             self.detector_combo,
         ):
             widget.configure(state=tk.DISABLED)
-        self.image_button.configure(state=tk.NORMAL)
+        self._set_widget_state(self.image_button, tk.NORMAL)
         self.snapshot_button.configure(state=tk.NORMAL)
         self.stop_button.configure(state=tk.NORMAL)
-        self.save_button.configure(state=tk.DISABLED)
-        self.quit_button.configure(state=tk.NORMAL)
+        self._set_widget_state(self.save_button, tk.DISABLED)
+        self._set_widget_state(self.quit_button, tk.NORMAL)
 
     def _set_processing_running(self) -> None:
         for widget in (
@@ -760,26 +767,37 @@ class FaceDetectorGui:
             self.snapshot_button,
         ):
             widget.configure(state=tk.DISABLED)
-        self.stop_button.configure(state=tk.DISABLED)
-        self.save_button.configure(state=tk.DISABLED)
-        self.quit_button.configure(state=tk.NORMAL)
+        self._set_widget_state(self.stop_button, tk.DISABLED)
+        self._set_widget_state(self.save_button, tk.DISABLED)
+        self._set_widget_state(self.quit_button, tk.NORMAL)
 
     def _set_idle_controls(self) -> None:
         if self.models is None:
             self._set_controls_enabled(False)
             return
-        self.camera_entry.configure(state=tk.NORMAL)
-        self.webcam_button.configure(state=tk.NORMAL)
-        self.image_button.configure(state=tk.NORMAL)
-        self.detector_combo.configure(state="readonly")
-        self.snapshot_button.configure(state=tk.DISABLED)
-        self.stop_button.configure(state=tk.DISABLED)
+        self._set_widget_state(self.camera_entry, tk.NORMAL)
+        self._set_widget_state(self.webcam_button, tk.NORMAL)
+        self._set_widget_state(self.image_button, tk.NORMAL)
+        self._set_widget_state(self.detector_combo, "readonly")
+        self._set_widget_state(self.snapshot_button, tk.DISABLED)
+        self._set_widget_state(self.stop_button, tk.DISABLED)
         self.stop_button.configure(text="Stop")
         self._set_save_enabled(self.latest_result is not None)
-        self.quit_button.configure(state=tk.NORMAL)
+        self._set_widget_state(self.quit_button, tk.NORMAL)
 
     def _set_save_enabled(self, enabled: bool) -> None:
-        self.save_button.configure(state=tk.NORMAL if enabled else tk.DISABLED)
+        self._set_widget_state(self.save_button, tk.NORMAL if enabled else tk.DISABLED)
+
+    def _set_widget_state(self, widget, state) -> None:
+        normalized = state
+        if state == tk.NORMAL:
+            normalized = "normal"
+        elif state == tk.DISABLED:
+            normalized = "disabled"
+        try:
+            widget.configure(state=normalized)
+        except tk.TclError:
+            widget.configure(state=state)
 
     def start_webcam(self) -> None:
         if self.models is None or self._is_worker_alive():
@@ -1132,7 +1150,7 @@ class FaceDetectorGui:
                 score = 0.0
                 
             self.game_current_score = score
-            self.game_score_bar["value"] = int(score)
+            self.game_score_bar.set(max(0.0, min(1.0, score / 100.0)))
             self.game_score_text_var.set(f"{int(score)}%")
             
             if score > self.game_max_score:
@@ -1153,8 +1171,8 @@ class FaceDetectorGui:
         if self.stop_event is not None:
             self.stop_event.set()
             self.status_var.set("Stopping")
-            self.stop_button.configure(state=tk.DISABLED)
-            self.snapshot_button.configure(state=tk.DISABLED)
+            self._set_widget_state(self.stop_button, tk.DISABLED)
+            self._set_widget_state(self.snapshot_button, tk.DISABLED)
 
     def close(self) -> None:
         if self.stop_event is not None:
@@ -1199,15 +1217,34 @@ class FaceDetectorGui:
         self._show_analysis_result(result, save_history=False)
         self.status_var.set(f"History: {result.source}")
 
+    def _emotion_badge_colors(self, emotion: str) -> tuple[str, str]:
+        key = (emotion or '').strip().lower()
+        mapping = {
+            'happy': ('#064e3b', '#d1fae5'),
+            'sad': ('#1e3a8a', '#dbeafe'),
+            'surprise': ('#78350f', '#fef3c7'),
+            'anger': ('#7f1d1d', '#fee2e2'),
+            'angry': ('#7f1d1d', '#fee2e2'),
+            'neutral': ('#374151', '#e5e7eb'),
+            'fear': ('#581c87', '#f3e8ff'),
+            'disgust': ('#14532d', '#dcfce7'),
+        }
+        return mapping.get(key, ('#0f766e', '#ccfbf1'))
+
+    def _confidence_bar_color(self, label: str) -> str:
+        return {
+            'Emotion': '#22c55e',
+            'Gender': '#38bdf8',
+            'Age': '#a78bfa',
+        }.get(label, '#22c55e')
+
     def _render_predictions(self, predictions: list[FacePrediction]) -> None:
-        # In game mode: skip the sidebar face-card panel entirely to reduce UI thread work
         if self.current_mode == "game":
             return
 
         current_count = len(predictions)
         cached_count = len(self.face_cards)
 
-        # If face count changed, do a full rebuild (rare event)
         if current_count != cached_count:
             for child in self.results_scroll.content.winfo_children():
                 child.destroy()
@@ -1215,12 +1252,13 @@ class FaceDetectorGui:
             self.face_cards.clear()
 
             if not predictions:
-                ttk.Label(
+                empty = ctk.CTkLabel(
                     self.results_scroll.content,
                     text="No face details",
-                    style="Muted.TLabel",
-                    padding=(12, 14),
-                ).pack(fill=tk.X)
+                    font=ctk.CTkFont(family="Segoe UI", size=12),
+                    text_color="#94a3b8",
+                )
+                empty.pack(fill=tk.X, padx=12, pady=14)
                 return
 
             for index, prediction in enumerate(predictions, start=1):
@@ -1228,57 +1266,89 @@ class FaceDetectorGui:
                 self.face_cards.append(card_refs)
             return
 
-        # Same face count: update widgets in-place (no destroy/recreate)
         for card_refs, prediction in zip(self.face_cards, predictions):
             result = prediction.result
             self._update_prediction_card(card_refs, prediction, result)
 
     def _add_prediction_card(self, index: int, prediction: FacePrediction) -> dict:
-        """Build card widgets and return references for in-place updates."""
         result = prediction.result
-        card = ttk.Frame(self.results_scroll.content, style="Card.TFrame", padding=(10, 10, 10, 10))
-        card.pack(fill=tk.X, pady=(0, 10))
-        card.columnconfigure(1, weight=1)
+        card = ctk.CTkFrame(
+            self.results_scroll.content,
+            fg_color="#162033",
+            corner_radius=18,
+            border_width=1,
+            border_color="#263449",
+        )
+        card.pack(fill=tk.X, pady=(0, 10), padx=2, ipadx=0, ipady=0)
+        card.grid_columnconfigure(1, weight=1)
 
+        media = ctk.CTkFrame(card, fg_color="transparent")
+        media.grid(row=0, column=0, sticky=tk.NW, padx=(12, 10), pady=10)
         if prediction.crop_bgr is not None:
             photo = self._make_crop_photo(prediction.crop_bgr)
             self.result_photo_refs.append(photo)
-            crop_label = ttk.Label(card, image=photo, style="CardBody.TLabel")
+            crop_label = tk.Label(media, image=photo, bg="#182235", bd=0, highlightthickness=0)
+            crop_label.image = photo
         else:
-            photo = None
             crop_label = tk.Label(
-                card,
+                media,
                 text=f"Face {index}",
-                width=10,
-                height=5,
+                width=11,
+                height=6,
                 bg="#0f172a",
                 fg="#94a3b8",
-                font=("Segoe UI", 9, "bold"),
+                font=("Segoe UI", 10, "bold"),
+                bd=0,
+                highlightthickness=0,
             )
-        crop_label.grid(row=0, column=0, rowspan=5, sticky=tk.NW, padx=(0, 10))
+        crop_label.pack()
 
-        title_label = ttk.Label(
-            card,
-            text=f"Face {index} - {result.emotion}",
-            style="CardTitle.TLabel",
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.grid(row=0, column=1, sticky=tk.NSEW, padx=(0, 12), pady=10)
+        body.grid_columnconfigure(0, weight=1)
+
+        header = ctk.CTkFrame(body, fg_color="transparent")
+        header.grid(row=0, column=0, sticky=tk.EW, pady=(0, 6))
+        header.grid_columnconfigure(0, weight=1)
+        title_label = ctk.CTkLabel(
+            header,
+            text=f"Face {index}",
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            text_color="#f8fafc",
         )
-        title_label.grid(row=0, column=1, sticky=tk.EW)
+        title_label.grid(row=0, column=0, sticky=tk.W)
+        badge_bg, badge_fg = self._emotion_badge_colors(result.emotion)
+        emotion_badge = ctk.CTkLabel(
+            header,
+            text=result.emotion,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color=badge_fg,
+            fg_color=badge_bg,
+            corner_radius=999,
+            padx=10,
+            pady=4,
+        )
+        emotion_badge.grid(row=0, column=1, sticky=tk.E)
 
-        e_refs = self._add_confidence_row(card, 1, "Emotion", result.emotion_confidence, result.emotion)
-        g_refs = self._add_confidence_row(card, 2, "Gender", result.gender_confidence, result.gender)
-        a_refs = self._add_confidence_row(card, 3, "Age", result.age_confidence, result.age)
+        e_refs = self._add_confidence_row(body, 1, "Emotion", result.emotion_confidence, result.emotion)
+        g_refs = self._add_confidence_row(body, 2, "Gender", result.gender_confidence, result.gender)
+        a_refs = self._add_confidence_row(body, 3, "Age", result.age_confidence, result.age)
 
         x, y, w, h = prediction.box
-        box_label = ttk.Label(
-            card,
+        footer = ctk.CTkFrame(body, fg_color="transparent")
+        footer.grid(row=4, column=0, sticky=tk.EW, pady=(8, 0))
+        box_label = ctk.CTkLabel(
+            footer,
             text=f"Box {w}x{h} at {x}, {y}",
-            style="CardMuted.TLabel",
+            font=ctk.CTkFont(family="Segoe UI", size=10),
+            text_color="#94a3b8",
         )
-        box_label.grid(row=4, column=1, sticky=tk.EW, pady=(4, 0))
+        box_label.pack(anchor=tk.W)
 
         return {
             "crop_label": crop_label,
             "title_label": title_label,
+            "emotion_badge": emotion_badge,
             "box_label": box_label,
             "emotion": e_refs,
             "gender": g_refs,
@@ -1287,18 +1357,19 @@ class FaceDetectorGui:
         }
 
     def _update_prediction_card(self, card_refs: dict, prediction: FacePrediction, result) -> None:
-        """Update existing card widgets in-place — no widget creation overhead."""
         index = card_refs["index"]
-        card_refs["title_label"].configure(text=f"Face {index} - {result.emotion}")
+        card_refs["title_label"].configure(text=f"Face {index}")
+        badge_bg, badge_fg = self._emotion_badge_colors(result.emotion)
+        card_refs["emotion_badge"].configure(text=result.emotion, fg_color=badge_bg, text_color=badge_fg)
 
         if prediction.crop_bgr is not None:
             photo = self._make_crop_photo(prediction.crop_bgr)
             self.result_photo_refs.append(photo)
             card_refs["crop_label"].configure(image=photo)
+            card_refs["crop_label"].image = photo
 
         x, y, w, h = prediction.box
         card_refs["box_label"].configure(text=f"Box {w}x{h} at {x}, {y}")
-
         self._update_confidence_row(card_refs["emotion"], result.emotion_confidence, result.emotion)
         self._update_confidence_row(card_refs["gender"], result.gender_confidence, result.gender)
         self._update_confidence_row(card_refs["age"], result.age_confidence, result.age)
@@ -1311,38 +1382,53 @@ class FaceDetectorGui:
         confidence: float,
         value: str,
     ) -> dict:
-        """Build a confidence row and return refs for in-place updates."""
         percent = max(0, min(100, int(round(float(confidence) * 100))))
-        wrapper = ttk.Frame(parent, style="Card.TFrame")
-        wrapper.grid(row=row, column=1, sticky=tk.EW, pady=(6, 0))
-        wrapper.columnconfigure(1, weight=1)
-        ttk.Label(wrapper, text=label, style="CardBody.TLabel", width=8).grid(
-            row=0, column=0, sticky=tk.W,
+        wrapper = ctk.CTkFrame(parent, fg_color="transparent")
+        wrapper.grid(row=row, column=0, sticky=tk.EW, pady=(0, 6))
+        wrapper.grid_columnconfigure(1, weight=1)
+
+        top = ctk.CTkFrame(wrapper, fg_color="transparent")
+        top.grid(row=0, column=0, columnspan=3, sticky=tk.EW)
+        top.grid_columnconfigure(1, weight=1)
+        label_widget = ctk.CTkLabel(
+            top,
+            text=label,
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#cbd5e1",
+            width=58,
         )
-        bar = ttk.Progressbar(
-            wrapper,
-            maximum=100,
-            value=percent,
-            style="Result.Horizontal.TProgressbar",
+        label_widget.grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
+        value_label = ctk.CTkLabel(
+            top,
+            text=value,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#93c5fd" if label == "Age" else "#cbd5e1",
         )
-        bar.grid(row=0, column=1, sticky=tk.EW, padx=(8, 8))
-        pct_label = ttk.Label(wrapper, text=f"{percent}%", style="CardBody.TLabel", width=5)
+        value_label.grid(row=0, column=1, sticky=tk.W)
+        pct_label = ctk.CTkLabel(
+            top,
+            text=f"{percent}%",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#f8fafc",
+            width=42,
+        )
         pct_label.grid(row=0, column=2, sticky=tk.E)
-        val_label = ttk.Label(wrapper, text=value, style="CardMuted.TLabel")
-        val_label.grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=(2, 0))
-        return {"bar": bar, "pct_label": pct_label, "val_label": val_label}
+
+        bar = ctk.CTkProgressBar(wrapper, progress_color=self._confidence_bar_color(label), fg_color="#334155", corner_radius=999, height=10)
+        bar.grid(row=1, column=0, columnspan=3, sticky=tk.EW, pady=(3, 0))
+        bar.set(percent / 100.0)
+        return {"bar": bar, "pct_label": pct_label, "val_label": value_label}
 
     def _update_confidence_row(self, refs: dict, confidence: float, value: str) -> None:
-        """Update confidence bar, percent text and value label in-place."""
         percent = max(0, min(100, int(round(float(confidence) * 100))))
-        refs["bar"]["value"] = percent
+        refs["bar"].set(percent / 100.0)
         refs["pct_label"].configure(text=f"{percent}%")
         refs["val_label"].configure(text=value)
 
     def _make_crop_photo(self, crop_bgr: np.ndarray) -> ImageTk.PhotoImage:
         crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(crop_rgb)
-        image = ImageOps.fit(image, (78, 78), method=Image.Resampling.BILINEAR)
+        image = ImageOps.fit(image, (92, 92), method=Image.Resampling.BILINEAR)
         return ImageTk.PhotoImage(image=image)
 
     def _queue_frame(self, frame_bgr: np.ndarray, *, force: bool = False) -> None:
@@ -1473,89 +1559,57 @@ class FaceDetectorGui:
 
     def _build_game_ui(self, parent) -> None:
         """Create UI elements for the Emotion Mimic Game."""
-        ttk.Label(parent, text="Trò chơi Bắt chước", style="Section.TLabel").pack(anchor=tk.W, pady=(0, 10))
-        
-        # Instructions Box
-        instr_card = ttk.Frame(parent, style="Card.TFrame", padding=(12, 10, 12, 10))
+        ctk.CTkLabel(
+            parent,
+            text="Trò chơi bắt chước",
+            font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"),
+            text_color="#f8fafc",
+        ).pack(anchor=tk.W, pady=(0, 10))
+
+        instr_card = ctk.CTkFrame(parent, fg_color="#172033", corner_radius=16, border_width=1, border_color="#243041")
         instr_card.pack(fill=tk.X, pady=(0, 14))
-        
-        ttk.Label(
+        ctk.CTkLabel(
             instr_card,
-            text="Hệ thống sẽ đưa ra một cảm xúc ngẫu nhiên. Hãy bắt chước cảm xúc đó trước camera để đạt điểm tối đa!",
-            style="CardBody.TLabel",
+            text="Hãy bắt chước cảm xúc trước camera",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#cbd5e1",
             wraplength=320,
-            justify=tk.LEFT
-        ).pack(anchor=tk.W)
-        
-        # Target Display Panel
-        target_card = ttk.Frame(parent, style="Card.TFrame", padding=(14, 14, 14, 14))
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, padx=12, pady=12)
+
+        target_card = ctk.CTkFrame(parent, fg_color="#172033", corner_radius=16, border_width=1, border_color="#243041")
         target_card.pack(fill=tk.X, pady=(0, 14))
-        
-        ttk.Label(target_card, text="MỤC TIÊU CẦN BIỂU CẢM:", style="CardMuted.TLabel").pack(anchor=tk.CENTER)
-        self.game_target_label = ttk.Label(
+        ctk.CTkLabel(target_card, text="Mục tiêu của biểu cảm", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="#94a3b8").pack(anchor=tk.CENTER, pady=(12, 4))
+        self.game_target_label = ctk.CTkLabel(
             target_card,
             textvariable=self.game_target_var,
-            font=("Segoe UI", 20, "bold"),
-            foreground="#f59e0b",
-            background="#1e293b"
+            font=ctk.CTkFont(family="Segoe UI", size=24, weight="bold"),
+            text_color="#f59e0b",
         )
-        self.game_target_label.pack(anchor=tk.CENTER, pady=(6, 0))
-        
-        # Current Score Progress
-        score_card = ttk.Frame(parent, style="Card.TFrame", padding=(14, 12, 14, 12))
+        self.game_target_label.pack(anchor=tk.CENTER, pady=(0, 12))
+
+        score_card = ctk.CTkFrame(parent, fg_color="#172033", corner_radius=16, border_width=1, border_color="#243041")
         score_card.pack(fill=tk.X, pady=(0, 14))
-        
-        score_row = ttk.Frame(score_card, style="Card.TFrame")
-        score_row.pack(fill=tk.X)
-        ttk.Label(score_row, text="Độ khớp nét mặt:", style="CardBody.TLabel").pack(side=tk.LEFT)
-        ttk.Label(score_row, textvariable=self.game_score_text_var, style="CardTitle.TLabel").pack(side=tk.RIGHT)
-        
-        self.game_score_bar = ttk.Progressbar(
-            score_card,
-            maximum=100,
-            value=0,
-            style="Result.Horizontal.TProgressbar"
-        )
-        self.game_score_bar.pack(fill=tk.X, pady=(6, 8))
-        
-        ttk.Label(score_card, textvariable=self.game_max_score_text_var, style="CardMuted.TLabel").pack(anchor=tk.W)
-        
-        # Status / Feedback Box
-        status_card = ttk.Frame(parent, style="Card.TFrame", padding=(12, 12, 12, 12))
+        score_row = ctk.CTkFrame(score_card, fg_color="transparent")
+        score_row.pack(fill=tk.X, padx=14, pady=(12, 6))
+        ctk.CTkLabel(score_row, text="Điểm", font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"), text_color="#cbd5e1").pack(side=tk.LEFT)
+        ctk.CTkLabel(score_row, textvariable=self.game_score_text_var, font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), text_color="#f8fafc").pack(side=tk.RIGHT)
+        self.game_score_bar = ctk.CTkProgressBar(score_card, progress_color="#10b981", fg_color="#334155", corner_radius=999, height=12)
+        self.game_score_bar.pack(fill=tk.X, padx=14, pady=(0, 8))
+        self.game_score_bar.set(0)
+        ctk.CTkLabel(score_card, textvariable=self.game_max_score_text_var, font=ctk.CTkFont(family="Segoe UI", size=11), text_color="#94a3b8").pack(anchor=tk.W, padx=14, pady=(0, 12))
+
+        status_card = ctk.CTkFrame(parent, fg_color="#172033", corner_radius=16, border_width=1, border_color="#243041")
         status_card.pack(fill=tk.X, pady=(0, 18))
-        
-        ttk.Label(status_card, text="Trạng thái:", style="CardMuted.TLabel").pack(anchor=tk.W)
-        ttk.Label(
-            status_card,
-            textvariable=self.game_status_var,
-            style="CardTitle.TLabel",
-            font=("Segoe UI", 12, "bold")
-        ).pack(anchor=tk.W, pady=(4, 2))
-        
-        ttk.Label(
-            status_card,
-            textvariable=self.game_feedback_var,
-            style="CardBody.TLabel",
-            font=("Segoe UI", 9, "italic")
-        ).pack(anchor=tk.W)
-        
-        # Control Buttons
-        self.game_start_btn = ttk.Button(
-            parent,
-            text="Bắt đầu chơi 🎮",
-            command=self._start_game,
-            style="Primary.TButton"
-        )
+        ctk.CTkLabel(status_card, text="Trạng thái", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="#94a3b8").pack(anchor=tk.W, padx=12, pady=(12, 2))
+        ctk.CTkLabel(status_card, textvariable=self.game_status_var, font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), text_color="#f8fafc").pack(anchor=tk.W, padx=12, pady=(0, 4))
+        ctk.CTkLabel(status_card, textvariable=self.game_feedback_var, font=ctk.CTkFont(family="Segoe UI", size=11), text_color="#cbd5e1", wraplength=320, justify=tk.LEFT).pack(anchor=tk.W, padx=12, pady=(0, 12))
+
+        self.game_start_btn = ctk.CTkButton(parent, text="Bắt đầu chơi", command=self._start_game, fg_color="#2563eb", hover_color="#1d4ed8", text_color="#ffffff", corner_radius=14, height=42)
         self.game_start_btn.pack(fill=tk.X, pady=(0, 8))
-        
-        self.game_stop_btn = ttk.Button(
-            parent,
-            text="Dừng chơi",
-            command=self._stop_game,
-            style="Danger.TButton"
-        )
+        self.game_stop_btn = ctk.CTkButton(parent, text="Dừng chơi", command=self._stop_game, fg_color="#dc2626", hover_color="#b91c1c", text_color="#ffffff", corner_radius=14, height=42)
         self.game_stop_btn.pack(fill=tk.X)
-        self.game_stop_btn.configure(state=tk.DISABLED)
+        self._set_widget_state(self.game_stop_btn, tk.DISABLED)
 
     def _start_game(self) -> None:
         """Initialize the game round and start the camera if needed."""
@@ -1589,12 +1643,12 @@ class FaceDetectorGui:
         self.game_current_score = 0.0
         self.game_active = True
         
-        self.game_start_btn.configure(state=tk.DISABLED)
-        self.game_stop_btn.configure(state=tk.NORMAL)
+        self._set_widget_state(self.game_start_btn, tk.DISABLED)
+        self._set_widget_state(self.game_stop_btn, tk.NORMAL)
         
         self.game_status_var.set("Chuẩn bị...")
         self.game_feedback_var.set("Chuẩn bị biểu diễn nét mặt!")
-        self.game_score_bar["value"] = 0
+        self.game_score_bar.set(0)
         self.game_score_text_var.set("0%")
         self.game_max_score_text_var.set("Cao nhất: 0%")
         
@@ -1635,8 +1689,8 @@ class FaceDetectorGui:
     def _finish_game_round(self) -> None:
         """Finalize game round, display results, and reset buttons."""
         self.game_active = False
-        self.game_start_btn.configure(state=tk.NORMAL)
-        self.game_stop_btn.configure(state=tk.DISABLED)
+        self._set_widget_state(self.game_start_btn, tk.NORMAL)
+        self._set_widget_state(self.game_stop_btn, tk.DISABLED)
         
         score = int(self.game_max_score)
         if score >= 80:
@@ -1653,12 +1707,12 @@ class FaceDetectorGui:
         """Force stop the current game session."""
         self.game_active = False
         self.game_stage = "idle"
-        self.game_start_btn.configure(state=tk.NORMAL)
-        self.game_stop_btn.configure(state=tk.DISABLED)
+        self._set_widget_state(self.game_start_btn, tk.NORMAL)
+        self._set_widget_state(self.game_stop_btn, tk.DISABLED)
         
         self.game_status_var.set("Đã dừng trò chơi.")
         self.game_feedback_var.set("Nhấn 'Bắt đầu chơi' để bắt đầu.")
-        self.game_score_bar["value"] = 0
+        self.game_score_bar.set(0)
         self.game_score_text_var.set("0%")
         self.game_max_score_text_var.set("Cao nhất: 0%")
 
@@ -1667,7 +1721,7 @@ class FaceDetectorGui:
         self.game_target_var.set("--")
         self.game_status_var.set("Đang chờ bắt đầu...")
         self.game_feedback_var.set("Nhấn 'Bắt đầu chơi' để bắt đầu.")
-        self.game_score_bar["value"] = 0
+        self.game_score_bar.set(0)
         self.game_score_text_var.set("0%")
         self.game_max_score_text_var.set("Cao nhất: 0%")
 
@@ -1679,14 +1733,14 @@ class FaceDetectorGui:
         self.current_mode = mode
         if mode == "detection":
             self._stop_game()
-            self.mode_detection_btn.configure(style="Primary.TButton")
-            self.mode_game_btn.configure(style="Tool.TButton")
+            self.mode_detection_btn.configure(fg_color="#2563eb", hover_color="#1d4ed8")
+            self.mode_game_btn.configure(fg_color="#334155", hover_color="#475569")
             self.game_view_frame.pack_forget()
             self.detection_view_frame.pack(fill=tk.BOTH, expand=True)
             self.status_var.set("Ready")
         else:
-            self.mode_detection_btn.configure(style="Tool.TButton")
-            self.mode_game_btn.configure(style="Primary.TButton")
+            self.mode_detection_btn.configure(fg_color="#334155", hover_color="#475569")
+            self.mode_game_btn.configure(fg_color="#2563eb", hover_color="#1d4ed8")
             self.detection_view_frame.pack_forget()
             self.game_view_frame.pack(fill=tk.BOTH, expand=True)
             self.status_var.set("Chế độ chơi game")
@@ -1794,7 +1848,9 @@ class FaceDetectorGui:
 
 
 def main() -> None:
-    root = tk.Tk()
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme("blue")
+    root = ctk.CTk()
     app = FaceDetectorGui(root)
     try:
         root.mainloop()

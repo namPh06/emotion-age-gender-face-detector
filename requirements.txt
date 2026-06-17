@@ -9,3 +9,4 @@ seaborn>=0.13
 scikit-learn>=1.3
 kaggle>=1.6
 huggingface_hub>=0.23
+customtkinter>=5.2
