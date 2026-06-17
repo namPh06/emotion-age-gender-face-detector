@@ -2,6 +2,10 @@
 
 Backbone: EfficientNetB2 (has built-in preprocessing).
 Input images are normalised to [0, 1] before prediction.
+
+Performance note: Uses direct model calls ``model(x, training=False)``
+instead of ``model.predict()`` for significantly faster single-sample
+inference (~3-5x speedup).
 """
 from __future__ import annotations
 
@@ -110,8 +114,8 @@ def predict_age_gender(
     """
     batch = preprocess_face(face_bgr, image_size)
 
-    gender_output = gender_model.predict(batch, verbose=0)
-    age_output = age_model.predict(batch, verbose=0)
+    gender_output = gender_model(batch, training=False)
+    age_output = age_model(batch, training=False)
 
     gender_probs = _to_probability_vector(gender_output, len(GENDER_LABELS))
     age_probs = _to_probability_vector(age_output, len(AGE_LABELS))

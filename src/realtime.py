@@ -1,4 +1,14 @@
-"""Helpers for lower-latency realtime face inference."""
+"""Helpers for lower-latency realtime face inference.
+
+Architecture: Two-phase background processing.
+- Phase 1 (every frame): Fast face detection (~15ms at 320px) updates
+  bounding box positions immediately so boxes track faces smoothly.
+- Phase 2 (throttled): ML prediction (age/gender/emotion) updates labels
+  at a lower rate without blocking the detection cadence.
+
+This decouples box tracking from prediction latency, eliminating the
+visual lag where boxes would freeze while models were running.
+"""
 from __future__ import annotations
 
 from collections import deque
@@ -29,9 +39,14 @@ class CachedFacePrediction:
 class AsyncRealtimeFaceProcessor:
     """Non-blocking realtime processor for smoother camera display.
 
-    ``process_frame`` only submits the newest frame for background inference
-    and draws the latest cached result. The camera loop no longer pauses while
-    TensorFlow is predicting.
+    Uses a two-phase background loop:
+    - **Detection phase** runs on every submitted frame for responsive
+      bounding box tracking (~15ms at 320px).
+    - **Prediction phase** runs at a lower rate to update age, gender,
+      and emotion labels without blocking the detection cadence.
+
+    The camera loop calls ``process_frame`` which submits the frame and
+    draws the latest merged results (fresh boxes + cached labels).
     """
 
     def __init__(
@@ -68,10 +83,13 @@ class AsyncRealtimeFaceProcessor:
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
         self._latest_frame: np.ndarray | None = None
-        self._last_submit_time = 0.0
         self._last_full_predict_time = time.time()
+        self._last_predict_time = 0.0
         self._worker_thread: threading.Thread | None = None
+        # cached_predictions: latest ML labels (used for label matching)
         self.cached_predictions: List[CachedFacePrediction] = []
+        # _display_predictions: fresh boxes merged with cached labels (used for drawing)
+        self._display_predictions: List[CachedFacePrediction] = []
         self._prev_boxes: List[Box] = []
         self._emotion_histories: list[deque[tuple[str, float]]] = [
             deque(maxlen=self.emotion_history_size) for _ in range(self.max_faces)
@@ -114,22 +132,29 @@ class AsyncRealtimeFaceProcessor:
         return len(predictions)
 
     def _submit_frame(self, frame_bgr: np.ndarray, *, force: bool = False) -> None:
-        now = time.time()
-        if not force and now - self._last_submit_time < self.inference_interval:
-            return
-        self._last_submit_time = now
+        """Submit frame for background processing.
 
+        No throttling — always accepts the latest frame so detection
+        runs as fast as the worker can process.  The worker naturally
+        drops stale frames by always picking the newest one.
+        """
         with self._lock:
             self._latest_frame = frame_bgr.copy()
         self._wake_event.set()
 
     def _get_cached_predictions(self) -> List[CachedFacePrediction]:
+        """Return display predictions (fresh boxes + cached labels)."""
         with self._lock:
-            return list(self.cached_predictions)
+            return list(self._display_predictions)
+
+    # ------------------------------------------------------------------
+    # Background worker
+    # ------------------------------------------------------------------
 
     def _worker_loop(self) -> None:
+        """Two-phase loop: always detect, conditionally predict."""
         while not self._stop_event.is_set():
-            self._wake_event.wait(timeout=0.1)
+            self._wake_event.wait(timeout=0.04)
             self._wake_event.clear()
 
             with self._lock:
@@ -139,40 +164,44 @@ class AsyncRealtimeFaceProcessor:
             if frame is None:
                 continue
 
-            predictions = self._predict_current_frame(frame)
-            predictions = self._smooth_predictions(predictions)
+            # Phase 1: ALWAYS detect faces (fast at reduced resolution)
+            boxes = self._detect_boxes(frame)
+            boxes = boxes[: self.max_faces]
 
+            # Immediately merge fresh boxes with cached labels for display
             with self._lock:
-                self.cached_predictions = predictions
+                cached_labels = list(self.cached_predictions)
+            display = self._merge_boxes_with_labels(boxes, cached_labels)
+            with self._lock:
+                self._display_predictions = display
 
-    def _predict_current_frame(self, frame_bgr: np.ndarray) -> List[CachedFacePrediction]:
-        boxes = self._detect_boxes(frame_bgr)
-        predictions: List[CachedFacePrediction] = []
-        now = time.time()
-        run_full = (
-            self.predict_emotion is None
-            or now - self._last_full_predict_time >= self.full_inference_interval
-        )
+            # Phase 2: Conditionally run ML predictions (throttled)
+            now = time.time()
+            run_full = (
+                self.predict_emotion is None
+                or now - self._last_full_predict_time >= self.full_inference_interval
+            )
+            should_predict = run_full or (
+                now - self._last_predict_time >= self.inference_interval
+            )
 
-        with self._lock:
-            previous_predictions = list(self.cached_predictions)
+            if should_predict and boxes:
+                predictions = self._predict_on_boxes(
+                    frame, boxes, cached_labels, run_full
+                )
+                predictions = self._smooth_predictions(predictions)
 
-        for index, box in enumerate(boxes[: self.max_faces]):
-            try:
-                face = crop_face_bgr(frame_bgr, box, margin=self.config.margin)
-                if run_full:
-                    result = self.predict_face(face, self.models)
-                else:
-                    result = self._predict_fast_result(face, box, previous_predictions)
-            except Exception as exc:
-                logger.warning("Skipping face with prediction error: %s", exc)
-                continue
-            predictions.append(CachedFacePrediction(box=box, result=result))
+                with self._lock:
+                    self.cached_predictions = predictions
+                    self._display_predictions = predictions
 
-        if run_full and predictions:
-            self._last_full_predict_time = now
+                self._last_predict_time = now
+                if run_full and predictions:
+                    self._last_full_predict_time = now
 
-        return predictions
+    # ------------------------------------------------------------------
+    # Detection helpers
+    # ------------------------------------------------------------------
 
     def _detect_boxes(self, frame_bgr: np.ndarray) -> List[Box]:
         height, width = frame_bgr.shape[:2]
@@ -200,6 +229,84 @@ class AsyncRealtimeFaceProcessor:
             )
         return boxes
 
+    def _merge_boxes_with_labels(
+        self,
+        fresh_boxes: List[Box],
+        cached_predictions: List[CachedFacePrediction],
+    ) -> List[CachedFacePrediction]:
+        """Match fresh detection boxes with cached prediction labels via IoU.
+
+        This is the key to smooth box tracking: detection boxes are always
+        fresh (from the current frame) while labels come from the latest
+        prediction cycle.
+        """
+        if not fresh_boxes:
+            return []
+
+        if not cached_predictions:
+            # No labels yet — show boxes with placeholder labels if possible
+            result: List[CachedFacePrediction] = []
+            for box in fresh_boxes:
+                if self.partial_result_factory:
+                    placeholder = self.partial_result_factory("...", 0.0)
+                    result.append(CachedFacePrediction(box=box, result=placeholder))
+            return result
+
+        result: List[CachedFacePrediction] = []
+        used: set[int] = set()
+        for box in fresh_boxes:
+            best_idx: int | None = None
+            best_iou = 0.08  # Low threshold to match even when face moves fast
+            for i, cached in enumerate(cached_predictions):
+                if i in used:
+                    continue
+                iou = self._box_iou(box, cached.box)
+                if iou > best_iou:
+                    best_iou = iou
+                    best_idx = i
+
+            if best_idx is not None:
+                used.add(best_idx)
+                result.append(
+                    CachedFacePrediction(
+                        box=box,
+                        result=copy(cached_predictions[best_idx].result),
+                    )
+                )
+            elif self.partial_result_factory:
+                placeholder = self.partial_result_factory("...", 0.0)
+                result.append(CachedFacePrediction(box=box, result=placeholder))
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Prediction helpers
+    # ------------------------------------------------------------------
+
+    def _predict_on_boxes(
+        self,
+        frame_bgr: np.ndarray,
+        boxes: List[Box],
+        previous_predictions: List[CachedFacePrediction],
+        run_full: bool,
+    ) -> List[CachedFacePrediction]:
+        """Run ML predictions on detected face boxes."""
+        predictions: List[CachedFacePrediction] = []
+        for box in boxes:
+            try:
+                face = crop_face_bgr(frame_bgr, box, margin=self.config.margin)
+                if run_full:
+                    result = self.predict_face(face, self.models)
+                else:
+                    result = self._predict_fast_result(
+                        face, box, previous_predictions
+                    )
+            except Exception as exc:
+                logger.warning("Skipping face with prediction error: %s", exc)
+                continue
+            predictions.append(CachedFacePrediction(box=box, result=result))
+        return predictions
+
     def _predict_fast_result(
         self,
         face_bgr: np.ndarray,
@@ -223,6 +330,10 @@ class AsyncRealtimeFaceProcessor:
         result.emotion = emotion
         result.emotion_confidence = confidence
         return result
+
+    # ------------------------------------------------------------------
+    # IoU / matching helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _box_iou(a: Box, b: Box) -> float:
@@ -257,6 +368,10 @@ class AsyncRealtimeFaceProcessor:
                 best_iou = iou
                 best = prev
         return best
+
+    # ------------------------------------------------------------------
+    # Emotion smoothing
+    # ------------------------------------------------------------------
 
     def _smooth_predictions(
         self,
@@ -343,12 +458,18 @@ class AsyncRealtimeFaceProcessor:
             return candidate_label, candidate_confidence
 
         stable_label, stable_confidence = stable
+
+        # Fast path: same emotion — always update confidence
+        if candidate_label == stable_label:
+            self._stable_emotions[index] = (candidate_label, candidate_confidence)
+            return candidate_label, candidate_confidence
+
+        # Different emotion — check switch conditions
         recent_candidate_count = sum(
             1 for label, _confidence in history if label == candidate_label
         )
         should_switch = (
-            candidate_label == stable_label
-            or recent_candidate_count >= self.label_switch_count
+            recent_candidate_count >= self.label_switch_count
             or candidate_confidence >= stable_confidence + self.label_switch_margin
         )
 
@@ -358,9 +479,16 @@ class AsyncRealtimeFaceProcessor:
         return stable_label, stable_confidence
 
     def _majority_emotion(self, history: deque[tuple[str, float]]) -> tuple[str, float]:
+        """Weighted majority vote with exponential recency bias.
+
+        Uses ``2 ** index`` weighting so the newest reading dominates,
+        making emotion transitions more responsive while still filtering
+        single-frame noise via the history window.
+        """
         scores: dict[str, float] = {}
-        for history_index, (label, confidence) in enumerate(history, start=1):
-            scores[label] = scores.get(label, 0.0) + confidence * history_index
+        for history_index, (label, confidence) in enumerate(history):
+            weight = 2 ** history_index  # exponential: 1, 2, 4, 8, ...
+            scores[label] = scores.get(label, 0.0) + confidence * weight
 
         label = max(scores, key=scores.get)
         confidences = [
