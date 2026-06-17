@@ -104,44 +104,84 @@ def warm_up_models(models: Models) -> None:
     """Run one dummy inference so webcam labels appear faster later."""
     dummy = np.zeros((1, IMAGE_SIZE, IMAGE_SIZE, 3), dtype="float32")
     try:
-        models.gender_model.predict(dummy, verbose=0)
-        models.age_model.predict(dummy, verbose=0)
-        models.emotion_model.predict(dummy, verbose=0)
+        models.gender_model(dummy, training=False)
+        models.age_model(dummy, training=False)
+        models.emotion_model(dummy, training=False)
     except Exception as exc:
         logger.warning("Could not warm up models: %s", exc)
 
 
 def predict_face(face_bgr: np.ndarray, models: Models) -> FaceResult:
-    """Run all predictions on one face crop."""
-    age_gender = predict_age_gender(
-        face_bgr,
-        models.gender_model,
-        models.age_model,
-        image_size=IMAGE_SIZE,
+    """Run all predictions on one face crop.
+
+    Preprocesses the face once and reuses the batch for all three models
+    to avoid redundant BGR→RGB conversion, resize, and float normalisation.
+    """
+    from src.utils import preprocess_face as _preprocess
+    from src.predict_age_gender import _to_probability_vector as _ag_probs, AGE_LABELS, GENDER_LABELS
+    from src.predict_emotion import (
+        _preprocess_face as _preprocess_emotion,
+        _to_probability_vector as _em_probs,
+        EMOTION_LABELS, HAPPY_INDEX, detect_smile_bgr,
     )
-    emotion = predict_emotion(
-        face_bgr,
-        models.emotion_model,
-        image_size=IMAGE_SIZE,
-    )
+
+    # --- Age / Gender (shared preprocessing) ---
+    batch = _preprocess(face_bgr, IMAGE_SIZE)
+    gender_output = models.gender_model(batch, training=False)
+    age_output = models.age_model(batch, training=False)
+    gender_probs = _ag_probs(gender_output, len(GENDER_LABELS))
+    age_probs = _ag_probs(age_output, len(AGE_LABELS))
+    gender_idx = int(np.argmax(gender_probs))
+    age_idx = int(np.argmax(age_probs))
+
+    # --- Emotion (uses its own preprocessing) ---
+    emotion_batch = _preprocess_emotion(face_bgr, IMAGE_SIZE)
+    emotion_output = models.emotion_model(emotion_batch, training=False)
+    probs = _em_probs(emotion_output)
+    idx = int(np.argmax(probs))
+    smile_detected = detect_smile_bgr(face_bgr)
+    if smile_detected and idx != HAPPY_INDEX:
+        top_confidence = float(probs[idx])
+        happy_confidence = float(probs[HAPPY_INDEX])
+        if happy_confidence >= 0.08 or top_confidence < 0.95:
+            idx = HAPPY_INDEX
+            probs = probs.copy()
+            probs[HAPPY_INDEX] = max(happy_confidence, 0.72)
+
     return FaceResult(
-        gender=age_gender["gender"],
-        gender_confidence=age_gender["gender_confidence"],
-        age=age_gender["age"],
-        age_confidence=age_gender["age_confidence"],
-        emotion=emotion["emotion"],
-        emotion_confidence=emotion["emotion_confidence"],
+        gender=GENDER_LABELS[gender_idx],
+        gender_confidence=float(gender_probs[gender_idx]),
+        age=AGE_LABELS[age_idx],
+        age_confidence=float(age_probs[age_idx]),
+        emotion=EMOTION_LABELS[idx],
+        emotion_confidence=float(probs[idx]),
     )
 
 
 def predict_emotion_only(face_bgr: np.ndarray, models: Models) -> tuple[str, float]:
-    """Predict only emotion for faster realtime updates."""
-    emotion = predict_emotion(
-        face_bgr,
-        models.emotion_model,
-        image_size=IMAGE_SIZE,
+    """Predict only emotion for faster realtime updates.
+
+    Uses direct model call to bypass predict_emotion() overhead.
+    """
+    from src.predict_emotion import (
+        _preprocess_face as _preprocess_emotion,
+        _to_probability_vector as _em_probs,
+        EMOTION_LABELS, HAPPY_INDEX, detect_smile_bgr,
     )
-    return emotion["emotion"], emotion["emotion_confidence"]
+
+    batch = _preprocess_emotion(face_bgr, IMAGE_SIZE)
+    output = models.emotion_model(batch, training=False)
+    probs = _em_probs(output)
+    idx = int(np.argmax(probs))
+    smile_detected = detect_smile_bgr(face_bgr)
+    if smile_detected and idx != HAPPY_INDEX:
+        top_confidence = float(probs[idx])
+        happy_confidence = float(probs[HAPPY_INDEX])
+        if happy_confidence >= 0.08 or top_confidence < 0.95:
+            idx = HAPPY_INDEX
+            probs = probs.copy()
+            probs[HAPPY_INDEX] = max(happy_confidence, 0.72)
+    return EMOTION_LABELS[idx], float(probs[idx])
 
 
 def make_partial_face_result(emotion: str, confidence: float) -> FaceResult:
@@ -267,7 +307,6 @@ class FaceDetectorGui:
         self.game_score_text_var = tk.StringVar(value="0%")
         self.game_max_score_text_var = tk.StringVar(value="Cao nhất: 0%")
         self.game_feedback_var = tk.StringVar(value="Nhấn 'Bắt đầu chơi' để chơi.")
-
         self._build_ui()
         self._set_controls_enabled(False)
         self._start_model_loader()
@@ -929,12 +968,12 @@ class FaceDetectorGui:
             predict_emotion=predict_emotion_only,
             partial_result_factory=make_partial_face_result,
             inference_interval=interval_seconds,
-            full_inference_interval=0.5,
-            detection_width=640,
+            full_inference_interval=0.35,
+            detection_width=320,
             max_faces=3,
-            emotion_history_size=3,
-            emotion_min_confidence=0.35,
-            label_switch_margin=0.15,
+            emotion_history_size=2,
+            emotion_min_confidence=0.25,
+            label_switch_margin=0.08,
             label_switch_count=2,
         )
         prev_time = time.time()
@@ -957,7 +996,7 @@ class FaceDetectorGui:
                 prev_time = now
                 draw_fps(frame, fps)
 
-                if now - last_ui_update >= 0.35:
+                if now - last_ui_update >= 0.25:
                     cached = processor._get_cached_predictions()
                     predictions = [
                         FacePrediction(box=item.box, result=copy(item.result))
@@ -1437,13 +1476,15 @@ class FaceDetectorGui:
             return
         self.last_display_time = now
 
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        # Use cv2.resize instead of PIL for ~3x faster frame conversion
+        target_w, target_h = self.preview_size
+        h, w = frame_bgr.shape[:2]
+        scale = min(target_w / max(w, 1), target_h / max(h, 1))
+        new_w = max(1, int(w * scale))
+        new_h = max(1, int(h * scale))
+        resized = cv2.resize(frame_bgr, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        frame_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(frame_rgb)
-        image = ImageOps.contain(
-            image,
-            self.preview_size,
-            method=Image.Resampling.BILINEAR,
-        )
 
         try:
             if self.frame_queue.full():
@@ -1553,7 +1594,7 @@ class FaceDetectorGui:
             min_neighbors=4,
             min_size=(32, 32),
             margin=0.35,
-            yolo_imgsz=640,
+            yolo_imgsz=320,
             yolo_max_det=20,
         )
 
@@ -1613,6 +1654,7 @@ class FaceDetectorGui:
 
     def _start_game(self) -> None:
         """Initialize the game round and start the camera if needed."""
+
         if self.models is None:
             messagebox.showerror("Lỗi", "Mô hình chưa tải xong, vui lòng đợi một chút.")
             return
@@ -1656,6 +1698,7 @@ class FaceDetectorGui:
 
     def _game_tick(self) -> None:
         """Game timer tick update loop running on the UI thread."""
+
         if not self.game_active:
             return
             
@@ -1688,6 +1731,7 @@ class FaceDetectorGui:
 
     def _finish_game_round(self) -> None:
         """Finalize game round, display results, and reset buttons."""
+
         self.game_active = False
         self._set_widget_state(self.game_start_btn, tk.NORMAL)
         self._set_widget_state(self.game_stop_btn, tk.DISABLED)
@@ -1705,6 +1749,7 @@ class FaceDetectorGui:
 
     def _stop_game(self) -> None:
         """Force stop the current game session."""
+
         self.game_active = False
         self.game_stage = "idle"
         self._set_widget_state(self.game_start_btn, tk.NORMAL)
@@ -1718,6 +1763,7 @@ class FaceDetectorGui:
 
     def _reset_game_state_ui(self) -> None:
         """Reset game mode labels to initial state."""
+
         self.game_target_var.set("--")
         self.game_status_var.set("Đang chờ bắt đầu...")
         self.game_feedback_var.set("Nhấn 'Bắt đầu chơi' để bắt đầu.")
@@ -1727,6 +1773,7 @@ class FaceDetectorGui:
 
     def _switch_mode(self, mode: str) -> None:
         """Switch sidebar content between Detection mode and Game mode."""
+
         if self.current_mode == mode:
             return
             
