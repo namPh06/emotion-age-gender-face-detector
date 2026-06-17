@@ -12,6 +12,8 @@ import time
 import tkinter as tk
 import traceback
 from tkinter import filedialog, messagebox, ttk
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 import customtkinter as ctk
 from typing import Optional
 
@@ -23,6 +25,7 @@ from src.detect_face import FaceDetectionConfig, crop_face_bgr, detect_faces_bgr
 from src.predict_age_gender import load_age_gender_models, predict_age_gender
 from src.predict_emotion import load_emotion_model, predict_emotion
 from src.realtime import AsyncRealtimeFaceProcessor
+from src.analytics import RealtimeAnalyticsStore
 
 logging.basicConfig(
     level=logging.INFO,
@@ -279,6 +282,11 @@ class FaceDetectorGui:
         self.result_photo_refs: list[ImageTk.PhotoImage] = []
         # Cache of live card widget-groups for in-place updates (avoids full destroy/recreate)
         self.face_cards: list[dict] = []
+        self.analytics_store = RealtimeAnalyticsStore(window_seconds=45, sample_interval=1.0)
+        self.last_dashboard_refresh = 0.0
+        self.analytics_canvas = None
+        self.analytics_figure = None
+        self.analytics_axes = {}
 
         self.status_var = tk.StringVar(value="Loading models...")
         self.camera_index_var = tk.StringVar(value="0")
@@ -488,6 +496,7 @@ class FaceDetectorGui:
         self._build_controls(self.detection_view_frame)
 
         self._build_results(self.detection_view_frame)
+        self._build_analytics(self.detection_view_frame)
 
         self.history_container = ctk.CTkFrame(self.detection_view_frame, fg_color="transparent")
         self.history_container.pack(fill=tk.X, pady=(4, 0))
@@ -665,6 +674,162 @@ class FaceDetectorGui:
         self.results_scroll.content = ctk.CTkFrame(self.results_scroll, fg_color="transparent")
         self.results_scroll.content.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         self._render_predictions([])
+
+    def _build_analytics(self, parent) -> None:
+        header = ctk.CTkFrame(parent, fg_color="transparent")
+        header.pack(fill=tk.X, pady=(18, 8))
+        ctk.CTkLabel(
+            header,
+            text="Analytics Dashboard",
+            font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"),
+            text_color="#f8fafc",
+        ).pack(side=tk.LEFT)
+
+        self.analytics_card = ctk.CTkFrame(
+            parent,
+            fg_color="#0f172a",
+            corner_radius=18,
+            border_width=1,
+            border_color="#243041",
+        )
+        self.analytics_card.pack(fill=tk.X, pady=(0, 4))
+
+        stats_grid = ctk.CTkFrame(self.analytics_card, fg_color="transparent")
+        stats_grid.pack(fill=tk.X, padx=12, pady=(12, 8))
+        stats_grid.grid_columnconfigure((0, 1, 2), weight=1, uniform="analytics")
+
+        self.analytics_faces_var = tk.StringVar(value="0")
+        self.analytics_gender_var = tk.StringVar(value="--")
+        self.analytics_age_var = tk.StringVar(value="--")
+
+        self._add_analytics_stat(stats_grid, "Faces", self.analytics_faces_var, 0)
+        self._add_analytics_stat(stats_grid, "Gender Ratio", self.analytics_gender_var, 1)
+        self._add_analytics_stat(stats_grid, "Age Groups", self.analytics_age_var, 2)
+
+        chart_frame = ctk.CTkFrame(self.analytics_card, fg_color="transparent")
+        chart_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+
+        self.analytics_figure = Figure(figsize=(6.2, 4.6), dpi=100, facecolor="#0f172a")
+        pie_ax = self.analytics_figure.add_subplot(211)
+        line_ax = self.analytics_figure.add_subplot(212)
+        self.analytics_axes = {"pie": pie_ax, "line": line_ax}
+
+        for ax in (pie_ax, line_ax):
+            ax.set_facecolor("#0f172a")
+
+        self.analytics_canvas = FigureCanvasTkAgg(self.analytics_figure, master=chart_frame)
+        canvas_widget = self.analytics_canvas.get_tk_widget()
+        canvas_widget.configure(bg="#0f172a", highlightthickness=0, bd=0)
+        canvas_widget.pack(fill=tk.BOTH, expand=True)
+
+        self._render_analytics_dashboard(force=True)
+
+    def _add_analytics_stat(self, parent, title: str, variable: tk.StringVar, column: int) -> None:
+        cell = ctk.CTkFrame(
+            parent,
+            fg_color="#162033",
+            corner_radius=14,
+            border_width=1,
+            border_color="#263449",
+        )
+        cell.grid(row=0, column=column, sticky=tk.EW, padx=(0 if column == 0 else 8, 0))
+        ctk.CTkLabel(
+            cell,
+            text=title,
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color="#94a3b8",
+        ).pack(anchor=tk.W, padx=10, pady=(10, 4))
+        ctk.CTkLabel(
+            cell,
+            textvariable=variable,
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            text_color="#f8fafc",
+            wraplength=100,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, padx=10, pady=(0, 10))
+
+    def _render_analytics_dashboard(self, *, force: bool = False) -> None:
+        if self.analytics_canvas is None or self.analytics_figure is None:
+            return
+
+        now = time.time()
+        if not force and now - self.last_dashboard_refresh < 1.0:
+            return
+        self.last_dashboard_refresh = now
+
+        summary = self.analytics_store.get_current_summary()
+        self.analytics_faces_var.set(str(summary.face_count))
+        self.analytics_gender_var.set(self.analytics_store.get_gender_ratio_text())
+        self.analytics_age_var.set(self.analytics_store.get_age_summary_text())
+
+        pie_ax = self.analytics_axes["pie"]
+        line_ax = self.analytics_axes["line"]
+        pie_ax.clear()
+        line_ax.clear()
+
+        for ax in (pie_ax, line_ax):
+            ax.set_facecolor("#0f172a")
+
+        emotion_counts = summary.emotion_counts
+        if emotion_counts:
+            labels = list(emotion_counts.keys())
+            values = list(emotion_counts.values())
+            colors = [self._chart_color(label) for label in labels]
+            pie_ax.pie(
+                values,
+                labels=labels,
+                autopct=lambda pct: f"{pct:.0f}%" if pct >= 5 else "",
+                startangle=90,
+                colors=colors,
+                textprops={"color": "#e5e7eb", "fontsize": 8},
+                wedgeprops={"width": 0.42, "edgecolor": "#0f172a"},
+            )
+            pie_ax.set_title("Current Emotion Mix", color="#f8fafc", fontsize=11)
+        else:
+            pie_ax.text(0.5, 0.5, "No emotion data", ha="center", va="center", color="#94a3b8", fontsize=10)
+            pie_ax.set_title("Current Emotion Mix", color="#f8fafc", fontsize=11)
+
+        labels, series = self.analytics_store.get_emotion_trend_series()
+        if series and labels:
+            for emotion, values in series.items():
+                line_ax.plot(labels, values, label=emotion, color=self._chart_color(emotion), linewidth=1.8, marker='o', markersize=3)
+            line_ax.set_title("Emotion Trend (Recent)", color="#f8fafc", fontsize=11)
+            line_ax.tick_params(axis='x', colors='#94a3b8', labelsize=8, rotation=35)
+            line_ax.tick_params(axis='y', colors='#94a3b8', labelsize=8)
+            line_ax.grid(True, color="#243041", alpha=0.6, linewidth=0.8)
+            line_ax.spines['bottom'].set_color('#334155')
+            line_ax.spines['left'].set_color('#334155')
+            line_ax.spines['top'].set_visible(False)
+            line_ax.spines['right'].set_visible(False)
+            line_ax.legend(loc='upper right', fontsize=7, facecolor='#111827', edgecolor='#334155', labelcolor='#e5e7eb')
+            if len(labels) > 8:
+                step = max(1, len(labels) // 8)
+                visible_idx = list(range(0, len(labels), step))
+                line_ax.set_xticks(visible_idx)
+                line_ax.set_xticklabels([labels[i] for i in visible_idx])
+        else:
+            line_ax.text(0.5, 0.5, "Trend appears after a few samples", ha="center", va="center", color="#94a3b8", fontsize=10)
+            line_ax.set_title("Emotion Trend (Recent)", color="#f8fafc", fontsize=11)
+            line_ax.set_xticks([])
+            line_ax.set_yticks([])
+            for spine in line_ax.spines.values():
+                spine.set_visible(False)
+
+        self.analytics_figure.tight_layout(pad=1.2)
+        self.analytics_canvas.draw_idle()
+
+    def _chart_color(self, label: str) -> str:
+        palette = {
+            "Happy": "#22c55e",
+            "Neutral": "#94a3b8",
+            "Sad": "#3b82f6",
+            "Surprise": "#f59e0b",
+            "Fear": "#a855f7",
+            "Disgust": "#10b981",
+            "Anger": "#ef4444",
+            "Angry": "#ef4444",
+        }
+        return palette.get((label or "").strip(), "#38bdf8")
 
     def _build_history(self, parent) -> None:
         header = ctk.CTkFrame(parent, fg_color="transparent")
@@ -859,6 +1024,8 @@ class FaceDetectorGui:
             messagebox.showerror("Camera Error", f"Could not open camera index {camera_index}.")
             return
 
+        self.analytics_store.reset()
+        self.last_dashboard_refresh = 0.0
         config = self._face_detection_config(source="webcam")
         self.status_var.set("Camera running")
         self.result_state_var.set("Live")
@@ -1175,7 +1342,9 @@ class FaceDetectorGui:
         self.active_detector_var.set(self._active_detector_label())
         self.result_state_var.set("Live")
         self._render_predictions(predictions)
-        
+        self.analytics_store.update(predictions, timestamp=time.time())
+        self._render_analytics_dashboard()
+
         # Game Mode scoring updates
         if self.game_active and self.game_stage == "playing":
             if predictions and self.game_target_emotion:
