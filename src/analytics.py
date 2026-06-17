@@ -21,6 +21,7 @@ class RealtimeAnalyticsStore:
         self.window_seconds = max(10, int(window_seconds))
         self.sample_interval = max(0.25, float(sample_interval))
         self.history: deque[AnalyticsFrameSnapshot] = deque()
+        self.emotion_totals: Counter[str] = Counter()
         self.current = AnalyticsFrameSnapshot(
             timestamp=0.0,
             face_count=0,
@@ -32,6 +33,7 @@ class RealtimeAnalyticsStore:
 
     def reset(self) -> None:
         self.history.clear()
+        self.emotion_totals.clear()
         self.current = AnalyticsFrameSnapshot(
             timestamp=0.0,
             face_count=0,
@@ -56,6 +58,7 @@ class RealtimeAnalyticsStore:
             emotion = str(getattr(result, 'emotion', '') or '').strip()
             if emotion and emotion != '...':
                 emotion_counts[emotion] += 1
+                self.emotion_totals[emotion] += 1
 
             gender = str(getattr(result, 'gender', '') or '').strip()
             if gender and gender != '...':
@@ -120,6 +123,9 @@ class RealtimeAnalyticsStore:
             return '--'
         items = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[: max(1, int(limit))]
         return ', '.join(f'{label}: {value}' for label, value in items)
+
+    def get_emotion_totals(self) -> dict[str, int]:
+        return dict(self.emotion_totals)
 
     def get_emotion_trend_series(self) -> tuple[list[str], dict[str, list[int]]]:
         snapshots = list(self.history)

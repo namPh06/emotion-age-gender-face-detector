@@ -711,10 +711,10 @@ class FaceDetectorGui:
 
         self.analytics_figure = Figure(figsize=(6.2, 4.6), dpi=100, facecolor="#0f172a")
         pie_ax = self.analytics_figure.add_subplot(211)
-        line_ax = self.analytics_figure.add_subplot(212)
-        self.analytics_axes = {"pie": pie_ax, "line": line_ax}
+        bar_ax = self.analytics_figure.add_subplot(212)
+        self.analytics_axes = {"pie": pie_ax, "bar": bar_ax}
 
-        for ax in (pie_ax, line_ax):
+        for ax in (pie_ax, bar_ax):
             ax.set_facecolor("#0f172a")
 
         self.analytics_canvas = FigureCanvasTkAgg(self.analytics_figure, master=chart_frame)
@@ -763,11 +763,11 @@ class FaceDetectorGui:
         self.analytics_age_var.set(self.analytics_store.get_age_summary_text())
 
         pie_ax = self.analytics_axes["pie"]
-        line_ax = self.analytics_axes["line"]
+        bar_ax = self.analytics_axes["bar"]
         pie_ax.clear()
-        line_ax.clear()
+        bar_ax.clear()
 
-        for ax in (pie_ax, line_ax):
+        for ax in (pie_ax, bar_ax):
             ax.set_facecolor("#0f172a")
 
         emotion_counts = summary.emotion_counts
@@ -789,30 +789,38 @@ class FaceDetectorGui:
             pie_ax.text(0.5, 0.5, "No emotion data", ha="center", va="center", color="#94a3b8", fontsize=10)
             pie_ax.set_title("Current Emotion Mix", color="#f8fafc", fontsize=11)
 
-        labels, series = self.analytics_store.get_emotion_trend_series()
-        if series and labels:
-            for emotion, values in series.items():
-                line_ax.plot(labels, values, label=emotion, color=self._chart_color(emotion), linewidth=1.8, marker='o', markersize=3)
-            line_ax.set_title("Emotion Trend (Recent)", color="#f8fafc", fontsize=11)
-            line_ax.tick_params(axis='x', colors='#94a3b8', labelsize=8, rotation=35)
-            line_ax.tick_params(axis='y', colors='#94a3b8', labelsize=8)
-            line_ax.grid(True, color="#243041", alpha=0.6, linewidth=0.8)
-            line_ax.spines['bottom'].set_color('#334155')
-            line_ax.spines['left'].set_color('#334155')
-            line_ax.spines['top'].set_visible(False)
-            line_ax.spines['right'].set_visible(False)
-            line_ax.legend(loc='upper right', fontsize=7, facecolor='#111827', edgecolor='#334155', labelcolor='#e5e7eb')
-            if len(labels) > 8:
-                step = max(1, len(labels) // 8)
-                visible_idx = list(range(0, len(labels), step))
-                line_ax.set_xticks(visible_idx)
-                line_ax.set_xticklabels([labels[i] for i in visible_idx])
+        emotion_order = ["Neutral", "Happy", "Sad", "Surprise", "Fear", "Disgust", "Anger"]
+        emotion_totals = self.analytics_store.get_emotion_totals()
+        bar_values = [int(emotion_totals.get(label, 0)) for label in emotion_order]
+        bar_colors = [self._chart_color(label) for label in emotion_order]
+        if any(bar_values):
+            bars = bar_ax.bar(emotion_order, bar_values, color=bar_colors, edgecolor="#0f172a", linewidth=0.8)
+            bar_ax.set_title("Emotion Totals (Camera Session)", color="#f8fafc", fontsize=11)
+            bar_ax.tick_params(axis='x', colors='#94a3b8', labelsize=8, rotation=25)
+            bar_ax.tick_params(axis='y', colors='#94a3b8', labelsize=8)
+            bar_ax.grid(True, axis='y', color="#243041", alpha=0.6, linewidth=0.8)
+            bar_ax.spines['bottom'].set_color('#334155')
+            bar_ax.spines['left'].set_color('#334155')
+            bar_ax.spines['top'].set_visible(False)
+            bar_ax.spines['right'].set_visible(False)
+            ymax = max(bar_values)
+            bar_ax.set_ylim(0, ymax * 1.12 if ymax > 0 else 1)
+            for bar, value in zip(bars, bar_values):
+                bar_ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    value + (ymax * 0.02 if ymax > 0 else 0.05),
+                    str(value),
+                    ha='center',
+                    va='bottom',
+                    color='#e5e7eb',
+                    fontsize=8,
+                )
         else:
-            line_ax.text(0.5, 0.5, "Trend appears after a few samples", ha="center", va="center", color="#94a3b8", fontsize=10)
-            line_ax.set_title("Emotion Trend (Recent)", color="#f8fafc", fontsize=11)
-            line_ax.set_xticks([])
-            line_ax.set_yticks([])
-            for spine in line_ax.spines.values():
+            bar_ax.text(0.5, 0.5, "No emotion data", ha="center", va="center", color="#94a3b8", fontsize=10)
+            bar_ax.set_title("Emotion Totals (Camera Session)", color="#f8fafc", fontsize=11)
+            bar_ax.set_xticks([])
+            bar_ax.set_yticks([])
+            for spine in bar_ax.spines.values():
                 spine.set_visible(False)
 
         self.analytics_figure.tight_layout(pad=1.2)
